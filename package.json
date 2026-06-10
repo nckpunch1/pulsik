@@ -1,0 +1,9 @@
+{
+  "name": "pulseiq-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot that posts weekly Thursday brain warmers to @pulseiq_au",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
