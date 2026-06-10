@@ -31,6 +31,7 @@ module.exports = async function handler(req, res) {
   if (!text) return res.status(200).json({ ok: true });
 
   const chatId = String(message.chat.id);
+  const chatType = message.chat.type; // "private", "group", "supergroup", "channel"
   const from = message.from || {};
   const userId = String(from.id || 'unknown');
   const username = from.username
@@ -40,26 +41,35 @@ module.exports = async function handler(req, res) {
   // Skip messages from the bot itself
   if (from.username === BOT_USERNAME) return res.status(200).json({ ok: true });
 
-  // Always record group messages for context
-  await appendToChannelContext(chatId, username, text);
+  // Never respond in broadcast channels
+  if (chatType === 'channel') return res.status(200).json({ ok: true });
 
-  // Check if the bot was @mentioned
-  const mentioned =
-    text.toLowerCase().includes(MENTION.toLowerCase()) ||
-    (message.entities || []).some(
-      e => e.type === 'mention' &&
-           text.slice(e.offset, e.offset + e.length).toLowerCase() === MENTION.toLowerCase()
-    );
+  const isPrivate = chatType === 'private';
+  const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  if (!mentioned) return res.status(200).json({ ok: true });
+  // Group chats: record context and require @mention
+  if (isGroup) {
+    await appendToChannelContext(chatId, username, text);
 
-  // Strip the mention and clean up whitespace
-  const userMessage = text.replace(new RegExp(MENTION, 'gi'), '').trim() || '👋';
+    const mentioned =
+      text.toLowerCase().includes(MENTION.toLowerCase()) ||
+      (message.entities || []).some(
+        e => e.type === 'mention' &&
+             text.slice(e.offset, e.offset + e.length).toLowerCase() === MENTION.toLowerCase()
+      );
+
+    if (!mentioned) return res.status(200).json({ ok: true });
+  }
+
+  // Strip @mention only in group context; pass full text in DMs
+  const userMessage = isGroup
+    ? (text.replace(new RegExp(MENTION, 'gi'), '').trim() || '👋')
+    : (text || '👋');
 
   try {
     const [userHistory, channelContext] = await Promise.all([
       getUserHistory(userId),
-      getChannelContext(chatId),
+      isGroup ? getChannelContext(chatId) : Promise.resolve([]),
     ]);
 
     const reply = await generateReply(
@@ -71,11 +81,12 @@ module.exports = async function handler(req, res) {
 
     await sendMessage(reply, chatId);
 
-    await Promise.all([
+    const historyWrites = [
       appendToUserHistory(userId, 'user', userMessage),
       appendToUserHistory(userId, 'assistant', reply),
-      appendToChannelContext(chatId, 'Пульсик', reply),
-    ]);
+    ];
+    if (isGroup) historyWrites.push(appendToChannelContext(chatId, 'Пульсик', reply));
+    await Promise.all(historyWrites);
   } catch (err) {
     console.error('[webhook] error:', err.message);
     await sendMessage('Ой, что-то я задумался... Попробуй ещё раз через минутку 🤔', chatId);
