@@ -3,6 +3,8 @@
 const { sendMessage } = require('../lib/telegram');
 const { generateReply } = require('../lib/llm');
 const { PERSONALITY_PROMPT } = require('../lib/personality');
+const { getUpcomingSessions } = require('../lib/sessions');
+const { formatSessionsForPrompt } = require('../lib/format');
 const {
   getUserHistory,
   appendToUserHistory,
@@ -67,13 +69,19 @@ module.exports = async function handler(req, res) {
     : (text || '👋');
 
   try {
-    const [userHistory, channelContext] = await Promise.all([
+    const [userHistory, channelContext, sessions] = await Promise.all([
       getUserHistory(userId),
       isGroup ? getChannelContext(chatId) : Promise.resolve([]),
+      getUpcomingSessions(),
     ]);
 
+    const sessionsText = formatSessionsForPrompt(sessions);
+    const fullSystemPrompt = sessionsText
+      ? `${PERSONALITY_PROMPT}\n\n${sessionsText}`
+      : PERSONALITY_PROMPT;
+
     const reply = await generateReply(
-      PERSONALITY_PROMPT,
+      fullSystemPrompt,
       userHistory,
       channelContext,
       userMessage
