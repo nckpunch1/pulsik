@@ -49,7 +49,7 @@ module.exports = async function handler(req, res) {
   const isPrivate = chatType === 'private';
   const isGroup = chatType === 'group' || chatType === 'supergroup';
 
-  // Group chats: record context and require @mention
+  // Group chats: record context and require one of three triggers
   if (isGroup) {
     await appendToChannelContext(chatId, username, text);
 
@@ -60,7 +60,15 @@ module.exports = async function handler(req, res) {
              text.slice(e.offset, e.offset + e.length).toLowerCase() === MENTION.toLowerCase()
       );
 
-    if (!mentioned) return res.status(200).json({ ok: true });
+    const namedPulsik = text.toLowerCase().includes('пульсик');
+
+    const replyToBot =
+      message.reply_to_message?.from?.username === BOT_USERNAME ||
+      message.reply_to_message?.from?.is_bot === true;
+
+    if (!mentioned && !namedPulsik && !replyToBot) {
+      return res.status(200).json({ ok: true });
+    }
   }
 
   // Strip @mention only in group context; pass full text in DMs
