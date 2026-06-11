@@ -4,7 +4,7 @@ Telegram bot (@pulse_iq_bot) for the [@pulseiq_au](https://t.me/pulseiq_au) chan
 
 **Two features:**
 1. **Weekly cron** — posts a *Четверговая разминка для мозга* every Thursday at 09:00 UTC (7 PM Brisbane / AEST UTC+10).
-2. **Conversational AI** — Пульсик responds when @mentioned in the group chat, powered by Google Gemini Flash with per-user memory and rolling channel context stored in Redis.
+2. **Conversational AI** — Пульсик responds when @mentioned in the group chat, powered by Groq (Llama 3.3 70B) with per-user memory and rolling channel context stored in Redis.
 
 ---
 
@@ -25,7 +25,7 @@ Telegram bot (@pulse_iq_bot) for the [@pulseiq_au](https://t.me/pulseiq_au) chan
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from [@BotFather](https://t.me/BotFather) |
 | `TELEGRAM_CHAT_ID` | Yes | Default channel for weekly posts, e.g. `@pulseiq_au` |
 | `CRON_SECRET` | Recommended | Vercel sends this as `Authorization: Bearer <secret>` on cron calls |
-| `GEMINI_API_KEY` | Yes | Google AI Studio key — get one at https://aistudio.google.com/apikey |
+| `GROQ_API_KEY` | Yes | Groq API key — get one at https://console.groq.com/keys |
 | `REDIS_URL` | Yes | Injected automatically by Vercel when a Redis store is connected |
 | `TELEGRAM_WEBHOOK_SECRET` | Recommended | Random string to verify webhook requests from Telegram |
 

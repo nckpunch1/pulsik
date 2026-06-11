@@ -1,7 +1,7 @@
 'use strict';
 
 const { sendMessage } = require('../lib/telegram');
-const { generateReply } = require('../lib/gemini');
+const { generateReply } = require('../lib/llm');
 const { PERSONALITY_PROMPT } = require('../lib/personality');
 const {
   getUserHistory,
