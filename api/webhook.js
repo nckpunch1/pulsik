@@ -2,7 +2,7 @@
 
 const { sendMessage } = require('../lib/telegram');
 const { generateReply } = require('../lib/llm');
-const { PERSONALITY_PROMPT } = require('../lib/personality');
+const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT } = require('../lib/personality');
 const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
 const {
@@ -10,6 +10,9 @@ const {
   appendToUserHistory,
   getChannelContext,
   appendToChannelContext,
+  getBlatnoyCounter,
+  setBlatnoyCounter,
+  decrementBlatnoyCounter,
 } = require('../lib/redis');
 
 const BOT_USERNAME = 'pulse_iq_bot';
@@ -76,17 +79,47 @@ module.exports = async function handler(req, res) {
     ? (text.replace(new RegExp(MENTION, 'gi'), '').trim() || '👋')
     : (text || '👋');
 
+  // Determine whether we're entering / continuing the Блатной Пульсик persona
+  const lowerText = text.toLowerCase();
+  const triggerActivation =
+    lowerText.includes('блатной') && lowerText.includes('пульсик');
+
   try {
+    const blatnoyCounter = await getBlatnoyCounter(chatId, userId);
+
+    const isBlatnoyMode = triggerActivation || blatnoyCounter > 0;
+
     const [userHistory, channelContext, sessions] = await Promise.all([
       getUserHistory(userId),
       isGroup ? getChannelContext(chatId) : Promise.resolve([]),
-      getUpcomingSessions(),
+      // Skip the schedule lookup entirely in persona mode — keep it pure character
+      isBlatnoyMode ? Promise.resolve([]) : getUpcomingSessions(),
     ]);
 
-    const sessionsText = formatSessionsForPrompt(sessions);
-    const fullSystemPrompt = sessionsText
-      ? `${PERSONALITY_PROMPT}\n\n${sessionsText}`
-      : PERSONALITY_PROMPT;
+    let fullSystemPrompt;
+
+    if (triggerActivation) {
+      // Entering the persona — set 4-message budget and play a theatrical intro
+      await setBlatnoyCounter(chatId, userId, 4);
+      fullSystemPrompt =
+        BLATNOY_PERSONALITY_PROMPT +
+        '\n\nЭто твоё первое появление в роли. Войди в образ театрально и весело.';
+    } else if (blatnoyCounter > 0) {
+      // Continuing the persona — count this message and wind down on the last one
+      const isFinalBlatnoyMessage = blatnoyCounter === 1;
+      fullSystemPrompt = BLATNOY_PERSONALITY_PROMPT;
+      if (isFinalBlatnoyMessage) {
+        fullSystemPrompt +=
+          '\n\nЭто твоё последнее сообщение в роли Блатного Пульсика. Намекни, что чай остыл / луна зашла / пора в дорогу, и попрощайся с этой ролью с лёгким сожалением. После этого ты автоматически вернёшься к обычному стилю.';
+      }
+      await decrementBlatnoyCounter(chatId, userId);
+    } else {
+      // Normal mode — main personality plus the upcoming-sessions context
+      const sessionsText = formatSessionsForPrompt(sessions);
+      fullSystemPrompt = sessionsText
+        ? `${PERSONALITY_PROMPT}\n\n${sessionsText}`
+        : PERSONALITY_PROMPT;
+    }
 
     const reply = await generateReply(
       fullSystemPrompt,
