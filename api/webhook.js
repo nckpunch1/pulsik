@@ -22,7 +22,7 @@ const MENTION = `@${BOT_USERNAME}`;
 // Caps LLM cost per message and blunts prompt-stuffing via giant messages
 const MAX_USER_MESSAGE_CHARS = 1000;
 // Per-minute reply budgets; exceeding them silently drops the message
-const USER_RATE_LIMIT = 6;
+const USER_RATE_LIMIT = 10;
 const CHAT_RATE_LIMIT = 20;
 
 module.exports = async function handler(req, res) {
