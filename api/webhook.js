@@ -13,19 +13,29 @@ const {
   getBlatnoyCounter,
   setBlatnoyCounter,
   decrementBlatnoyCounter,
+  checkRateLimit,
 } = require('../lib/redis');
 
 const BOT_USERNAME = 'pulse_iq_bot';
 const MENTION = `@${BOT_USERNAME}`;
 
+// Caps LLM cost per message and blunts prompt-stuffing via giant messages
+const MAX_USER_MESSAGE_CHARS = 1000;
+// Per-minute reply budgets; exceeding them silently drops the message
+const USER_RATE_LIMIT = 6;
+const CHAT_RATE_LIMIT = 20;
+
 module.exports = async function handler(req, res) {
-  // Verify webhook secret
+  // Fail closed: without the secret anyone who finds the URL can spoof updates
+  // and drive LLM calls / bot replies.
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret) {
-    const incoming = req.headers['x-telegram-bot-api-secret-token'];
-    if (incoming !== secret) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  if (!secret) {
+    console.error('[webhook] TELEGRAM_WEBHOOK_SECRET is not set — refusing to process updates');
+    return res.status(500).json({ error: 'Webhook secret is not configured' });
+  }
+  const incoming = req.headers['x-telegram-bot-api-secret-token'];
+  if (incoming !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const update = req.body;
@@ -74,10 +84,21 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  // Rate-limit only messages we would actually answer
+  const [userAllowed, chatAllowed] = await Promise.all([
+    checkRateLimit(`user:${userId}`, USER_RATE_LIMIT, 60),
+    checkRateLimit(`chat:${chatId}`, CHAT_RATE_LIMIT, 60),
+  ]);
+  if (!userAllowed || !chatAllowed) {
+    console.warn(`[webhook] rate limit hit (user ${userId}, chat ${chatId})`);
+    return res.status(200).json({ ok: true });
+  }
+
   // Strip @mention only in group context; pass full text in DMs
-  const userMessage = isGroup
+  const userMessage = (isGroup
     ? (text.replace(new RegExp(MENTION, 'gi'), '').trim() || '👋')
-    : (text || '👋');
+    : (text || '👋')
+  ).slice(0, MAX_USER_MESSAGE_CHARS);
 
   // Determine whether we're entering / continuing the Блатной Пульсик persona
   const lowerText = text.toLowerCase();
