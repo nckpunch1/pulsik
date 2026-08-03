@@ -15,7 +15,7 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const PUZZLE_SYSTEM_PROMPT = `Ты придумываешь одну свежую «Средовую разминку для мозга» для Telegram-канала PulseIQ (интеллектуальные игры в Брисбене). Аудитория — русскоязычные любители викторин.
+const PUZZLE_SYSTEM_PROMPT = `Ты придумываешь одну свежую загадку для еженедельной рубрики «СредаIQ — разминка для мозга» в Telegram-канале PulseIQ (интеллектуальные игры в Брисбене). Аудитория — русскоязычные любители викторин.
 
 Требования:
 - Загадка на русском языке: логика, игра слов, математическая задачка, lateral thinking, эрудиция (музыка, география, история, культура) — выбирай категорию разнообразно.
@@ -50,7 +50,7 @@ async function generatePuzzle(recentPuzzles) {
 
 function buildPost(question, answer) {
   return (
-    '🧠 <b>Средовая разминка для мозга</b>\n\n' +
+    '🧠 <b>СредаIQ — разминка для мозга</b>\n\n' +
     `${escapeHtml(question)}\n\n` +
     `<b>Ответ:</b> <tg-spoiler>${escapeHtml(answer)}</tg-spoiler>\n\n` +
     '🎯 <i>PulseIQ — интеллектуальные игры в Брисбене</i>'
