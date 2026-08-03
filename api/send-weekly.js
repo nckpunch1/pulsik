@@ -15,7 +15,7 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const PUZZLE_SYSTEM_PROMPT = `Ты придумываешь одну свежую «Четверговую разминку для мозга» для Telegram-канала PulseIQ (интеллектуальные игры в Брисбене). Аудитория — русскоязычные любители викторин.
+const PUZZLE_SYSTEM_PROMPT = `Ты придумываешь одну свежую «Средовую разминку для мозга» для Telegram-канала PulseIQ (интеллектуальные игры в Брисбене). Аудитория — русскоязычные любители викторин.
 
 Требования:
 - Загадка на русском языке: логика, игра слов, математическая задачка, lateral thinking, эрудиция (музыка, география, история, культура) — выбирай категорию разнообразно.
@@ -50,7 +50,7 @@ async function generatePuzzle(recentPuzzles) {
 
 function buildPost(question, answer) {
   return (
-    '🧠 <b>Четверговая разминка для мозга</b>\n\n' +
+    '🧠 <b>Средовая разминка для мозга</b>\n\n' +
     `${escapeHtml(question)}\n\n` +
     `<b>Ответ:</b> <tg-spoiler>${escapeHtml(answer)}</tg-spoiler>\n\n` +
     '🎯 <i>PulseIQ — интеллектуальные игры в Брисбене</i>'
@@ -76,10 +76,24 @@ module.exports = async function handler(req, res) {
     await appendRecentPuzzle(question);
     return res.status(200).json({ ok: true, source: 'generated' });
   } catch (err) {
-    console.error('[send-weekly] generation failed, using stored post:', err.message);
+    // Distinct, greppable marker: the weekly post went out as *static* content
+    // instead of a freshly generated puzzle. Vercel records the cron as a success
+    // either way, so this line is the only signal that generation is broken —
+    // alert on "FALLBACK_USED" in the logs.
+    console.error(
+      '[send-weekly] FALLBACK_USED — LLM generation failed, posted static fallback:',
+      err.stack || err.message
+    );
     const weekNumber = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
     const post = fallbackPosts[weekNumber % fallbackPosts.length];
+    // Still post: static content beats no post at all.
     await sendMessage(post.content);
-    return res.status(200).json({ ok: true, source: 'fallback', postId: post.id });
+    return res.status(200).json({
+      ok: true,
+      source: 'fallback',
+      degraded: true,
+      reason: err.message,
+      postId: post.id,
+    });
   }
 };
