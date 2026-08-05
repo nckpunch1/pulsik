@@ -2,7 +2,7 @@
 
 const { sendMessage } = require('../lib/telegram');
 const { generateReply } = require('../lib/llm');
-const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT } = require('../lib/personality');
+const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT, contextLine } = require('../lib/personality');
 const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
 const {
@@ -141,6 +141,13 @@ module.exports = async function handler(req, res) {
         ? `${PERSONALITY_PROMPT}\n\n${sessionsText}`
         : PERSONALITY_PROMPT;
     }
+
+    // Tell the persona which room it is in. This does not affect *whether* we
+    // reply — that gating happened above — only how the character behaves once
+    // we do: free-ranging chat and the puzzle-solving loop in a DM, hands off
+    // the spoiler-hidden weekly puzzle in a group. Applies in Блатной mode too,
+    // since the room is a property of the chat, not of the persona.
+    fullSystemPrompt += `\n\n${contextLine(isPrivate)}`;
 
     const reply = await generateReply(
       fullSystemPrompt,
