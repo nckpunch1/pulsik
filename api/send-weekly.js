@@ -31,12 +31,18 @@ async function generatePuzzle(recentPuzzles) {
     ? `\n\nНедавние загадки (НЕ повторяй их и не делай похожих):\n${recentPuzzles.map(p => `- ${p}`).join('\n')}`
     : '';
 
+  // 700 was not enough headroom: reasoning shares this budget, so a long think
+  // could consume it before the JSON was emitted, leaving output that fails the
+  // parse below and drops the week to static content. The visible JSON is only
+  // a couple of hundred tokens — the rest is slack for thinking. Reasoning
+  // effort is deliberately left at the model default here (unlike chat replies):
+  // this runs once a week and the puzzle is better for the extra thought.
   const raw = await complete(
     [
       { role: 'system', content: PUZZLE_SYSTEM_PROMPT },
       { role: 'user', content: `Придумай одну новую загадку.${avoidBlock}` },
     ],
-    { maxTokens: 700 }
+    { maxTokens: 2048 }
   );
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
