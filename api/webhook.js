@@ -2,6 +2,7 @@
 
 const { sendMessage } = require('../lib/telegram');
 const { generateReply } = require('../lib/llm');
+const { matchesStatusCommand, buildStatusReport } = require('../lib/bank-status');
 const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT, contextLine } = require('../lib/personality');
 const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
@@ -14,6 +15,7 @@ const {
   setBlatnoyCounter,
   decrementBlatnoyCounter,
   checkRateLimit,
+  getPostedPuzzleIds,
 } = require('../lib/redis');
 
 const BOT_USERNAME = 'pulse_iq_bot';
@@ -58,6 +60,18 @@ module.exports = async function handler(req, res) {
 
   // Never respond in broadcast channels
   if (chatType === 'channel') return res.status(200).json({ ok: true });
+
+  // Operator command, answered before any of the conversational machinery: it
+  // must not reach the LLM, must not land in the chat context or user history
+  // (the bank's state is operator business, not something for the persona to
+  // riff on), and must work identically in a DM and a group. The numeric code
+  // in the phrase is the gate — see lib/bank-status.js.
+  if (matchesStatusCommand(text)) {
+    console.log(`[webhook] bank status requested by ${username} (${userId}) in chat ${chatId}`);
+    const report = buildStatusReport(await getPostedPuzzleIds());
+    await sendMessage(report, chatId);
+    return res.status(200).json({ ok: true, command: 'bank-status' });
+  }
 
   const isPrivate = chatType === 'private';
   const isGroup = chatType === 'group' || chatType === 'supergroup';

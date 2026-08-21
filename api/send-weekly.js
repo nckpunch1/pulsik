@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const { sendMessage } = require('../lib/telegram');
+const { getWeeklyBank } = require('../lib/puzzle-bank');
 const {
   getPostedPuzzleIds,
   markPuzzlePosted,
@@ -14,37 +15,9 @@ const {
 // generation, which shipped puzzles that were sometimes ambiguous or outright
 // unsolvable — no amount of prompt or reasoning-effort tuning made a generated
 // riddle verifiably sound, and every entry here is human-checked instead.
-// Topping the bank up means editing this file and redeploying; it is read once
-// per cold start.
-const BANK_PATH = path.join(__dirname, '../content/weekly-puzzles.json');
-
-function loadBank() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(BANK_PATH, 'utf8'));
-    const entries = Array.isArray(raw.puzzles) ? raw.puzzles : [];
-    // An entry with no id can't be tracked across the cycle and one with no
-    // question/answer can't be posted, so drop those here rather than letting
-    // them surface as a broken post. explanation is optional.
-    const usable = entries.filter((p) => p && p.id && p.question && p.answer);
-    if (usable.length < entries.length) {
-      console.error(
-        `[send-weekly] weekly-puzzles.json: skipped ${entries.length - usable.length} entry(ies) missing id/question/answer`
-      );
-    }
-    if (usable.length === 0) throw new Error('no usable entries in puzzles[]');
-    return usable;
-  } catch (err) {
-    // Loud, greppable, and non-fatal: the request still posts, just from the old
-    // static set. Alert on BANK_UNAVAILABLE — it means the intended source is gone.
-    console.error(
-      '[send-weekly] BANK_UNAVAILABLE — could not load content/weekly-puzzles.json, falling back to static posts.json:',
-      err.message
-    );
-    return null;
-  }
-}
-
-const bank = loadBank();
+// Topping the bank up means editing content/weekly-puzzles.json and redeploying.
+// null when the file is missing or unreadable (lib/puzzle-bank logs why).
+const bank = getWeeklyBank();
 
 // Legacy static set, now only a safety net for a missing/broken bank file. Only
 // the type: 'puzzle' entries qualify: they carry the СредаIQ header and hide
@@ -71,11 +44,11 @@ function escapeHtml(s) {
 // Redis is what makes it no-repeat, so a redeploy or a reordered file can't
 // re-post something the channel has already seen.
 //
-// If Redis is unreachable the helpers return empty and this degrades to a plain
-// random pick — a repeat is possible, but the post still goes out, which is the
-// right trade for a once-a-week channel post.
+// If Redis is unreachable getPostedPuzzleIds returns null and this degrades to a
+// plain random pick — a repeat is possible, but the post still goes out, which
+// is the right trade for a once-a-week channel post.
 async function pickFromBank(puzzles) {
-  const posted = new Set(await getPostedPuzzleIds());
+  const posted = new Set(await getPostedPuzzleIds() || []);
   let candidates = puzzles.filter((p) => !posted.has(p.id));
   let cycleReset = false;
 
