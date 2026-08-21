@@ -3,123 +3,143 @@
 const path = require('path');
 const fs = require('fs');
 const { sendMessage } = require('../lib/telegram');
-const { complete } = require('../lib/llm');
-const { getRecentPuzzles, appendRecentPuzzle } = require('../lib/redis');
+const {
+  getPostedPuzzleIds,
+  markPuzzlePosted,
+  resetPostedPuzzleIds,
+  getLastPuzzleId,
+} = require('../lib/redis');
 
-// Stored posts are kept purely as a fallback when generation fails. Only the
-// type: 'puzzle' entries qualify: they carry the СредаIQ header and hide their
-// answer behind a spoiler, exactly like a generated post. The type: 'fact'
-// entries are a different format under their own header, and the selector below
-// used to cycle all 20 entries — so half of every fallback fire published a fact
-// into the slot the channel expects a puzzle in.
+// The curated bank is THE source of the weekly puzzle. It replaced LLM
+// generation, which shipped puzzles that were sometimes ambiguous or outright
+// unsolvable — no amount of prompt or reasoning-effort tuning made a generated
+// riddle verifiably sound, and every entry here is human-checked instead.
+// Topping the bank up means editing this file and redeploying; it is read once
+// per cold start.
+const BANK_PATH = path.join(__dirname, '../content/weekly-puzzles.json');
+
+function loadBank() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BANK_PATH, 'utf8'));
+    const entries = Array.isArray(raw.puzzles) ? raw.puzzles : [];
+    // An entry with no id can't be tracked across the cycle and one with no
+    // question/answer can't be posted, so drop those here rather than letting
+    // them surface as a broken post. explanation is optional.
+    const usable = entries.filter((p) => p && p.id && p.question && p.answer);
+    if (usable.length < entries.length) {
+      console.error(
+        `[send-weekly] weekly-puzzles.json: skipped ${entries.length - usable.length} entry(ies) missing id/question/answer`
+      );
+    }
+    if (usable.length === 0) throw new Error('no usable entries in puzzles[]');
+    return usable;
+  } catch (err) {
+    // Loud, greppable, and non-fatal: the request still posts, just from the old
+    // static set. Alert on BANK_UNAVAILABLE — it means the intended source is gone.
+    console.error(
+      '[send-weekly] BANK_UNAVAILABLE — could not load content/weekly-puzzles.json, falling back to static posts.json:',
+      err.message
+    );
+    return null;
+  }
+}
+
+const bank = loadBank();
+
+// Legacy static set, now only a safety net for a missing/broken bank file. Only
+// the type: 'puzzle' entries qualify: they carry the СредаIQ header and hide
+// their answer behind a spoiler, exactly like a bank post. The type: 'fact'
+// entries are a different format under their own header.
 const allPosts = JSON.parse(
   fs.readFileSync(path.join(__dirname, '../content/posts.json'), 'utf8')
 );
 const puzzlePosts = allPosts.filter((p) => p.type === 'puzzle');
-// Never leave the fallback with nothing to post: an empty puzzle set would make
-// the index below NaN and throw inside the catch, turning a degraded week into a
-// silent one. Posting an off-format entry is the lesser failure.
+// Never leave the safety net with nothing to post: an empty puzzle set would
+// make the index below NaN and throw, turning a degraded week into a silent one.
+// Posting an off-format entry is the lesser failure.
 const fallbackPosts = puzzlePosts.length > 0 ? puzzlePosts : allPosts;
 if (puzzlePosts.length === 0) {
-  console.error('[send-weekly] posts.json has no type:"puzzle" entries — fallback will post off-format content');
+  console.error('[send-weekly] posts.json has no type:"puzzle" entries — static fallback will post off-format content');
 }
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Pulls the puzzle object out of a model reply that may also contain prose, a
-// markdown code fence, or leftover reasoning.
+// Random draw with no repeat until the bank is used up. Random rather than
+// sequential so the running order differs between cycles; the posted-id set in
+// Redis is what makes it no-repeat, so a redeploy or a reordered file can't
+// re-post something the channel has already seen.
 //
-// The previous /\{[\s\S]*\}/ was greedy: it spanned from the FIRST '{' in the
-// whole reply to the LAST '}', so a single stray brace anywhere in the prose —
-// or a second JSON object — produced a span that could never parse. Scanning for
-// the first *balanced* object and testing each candidate is robust to all three,
-// and to braces appearing inside the puzzle text itself (string-aware, so a '}'
-// inside a quoted value doesn't close the object early).
-function extractPuzzleJson(text) {
-  const cleaned = String(text || '').replace(/```(?:json)?/gi, '');
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] !== '{') continue;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let j = i; j < cleaned.length; j++) {
-      const ch = cleaned[j];
-      if (escaped) { escaped = false; continue; }
-      if (ch === '\\') { escaped = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === '{') {
-        depth++;
-      } else if (ch === '}') {
-        depth--;
-        if (depth === 0) {
-          try {
-            const parsed = JSON.parse(cleaned.slice(i, j + 1));
-            if (parsed && parsed.question && parsed.answer) return parsed;
-          } catch {
-            // Not a usable object — keep scanning from the next brace.
-          }
-          break;
-        }
-      }
-    }
-  }
-  return null;
-}
+// If Redis is unreachable the helpers return empty and this degrades to a plain
+// random pick — a repeat is possible, but the post still goes out, which is the
+// right trade for a once-a-week channel post.
+async function pickFromBank(puzzles) {
+  const posted = new Set(await getPostedPuzzleIds());
+  let candidates = puzzles.filter((p) => !posted.has(p.id));
+  let cycleReset = false;
 
-const PUZZLE_SYSTEM_PROMPT = `Ты придумываешь одну свежую загадку для еженедельной рубрики «СредаIQ — прокачай интеллект» в Telegram-канале PulseIQ (интеллектуальные игры в Брисбене). Аудитория — русскоязычные любители викторин.
-
-Требования:
-- Загадка на русском языке: логика, игра слов, математическая задачка, lateral thinking, эрудиция (музыка, география, история, культура) — выбирай категорию разнообразно.
-- Решаемая за 1-2 минуты, весёлая, без пошлости и политики.
-- НЕ используй заезженные загадки и НЕ повторяй темы из списка недавних загадок, если он дан.
-- Ответ должен быть коротким и однозначным, с одним предложением объяснения, если оно нужно.
-
-Ответь СТРОГО в формате JSON без каких-либо пояснений вокруг:
-{"question": "текст загадки", "answer": "ответ (и краткое объяснение)"}`;
-
-async function generatePuzzle(recentPuzzles) {
-  const avoidBlock = recentPuzzles.length > 0
-    ? `\n\nНедавние загадки (НЕ повторяй их и не делай похожих):\n${recentPuzzles.map(p => `- ${p}`).join('\n')}`
-    : '';
-
-  // 2048 tokens with 'low' reasoning. The budget is shared with the <think>
-  // block, so a long think at the model's default 'medium' effort could consume
-  // it before a single character of JSON was emitted — which is exactly what
-  // 'no JSON in model output' reports. Structured output is the one job here,
-  // and thinking hard about a riddle is worth less than reliably returning it,
-  // so effort is capped rather than left at the default.
-  const raw = await complete(
-    [
-      { role: 'system', content: PUZZLE_SYSTEM_PROMPT },
-      { role: 'user', content: `Придумай одну новую загадку.${avoidBlock}` },
-    ],
-    { maxTokens: 2048, reasoningEffort: 'low' }
-  );
-
-  const parsed = extractPuzzleJson(raw);
-  // Include a snippet: this throw is the only diagnostic that survives into the
-  // FALLBACK_USED log line, and 'no JSON' alone never said what did come back.
-  if (!parsed) {
-    throw new Error(
-      `no parseable puzzle JSON in model output (${raw.length} chars): ${JSON.stringify(raw.slice(0, 200))}`
+  if (candidates.length === 0) {
+    // Greppable marker: the bank has wrapped, so the channel is about to start
+    // seeing repeats of puzzles it saw one full cycle ago. Alert on
+    // BANK_EXHAUSTED as the cue to top the file up.
+    console.warn(
+      `[send-weekly] BANK_EXHAUSTED — all ${puzzles.length} curated puzzles have been posted; reshuffling for a fresh cycle. Top up content/weekly-puzzles.json to keep the rotation fresh.`
     );
+    await resetPostedPuzzleIds();
+    cycleReset = true;
+    // A fresh cycle may legitimately redraw anything, but drawing last week's
+    // puzzle again would read as a bug to the channel, so exclude just that one.
+    const lastId = await getLastPuzzleId();
+    candidates = puzzles.filter((p) => p.id !== lastId);
+    if (candidates.length === 0) candidates = puzzles; // single-entry bank
   }
-  const question = String(parsed.question || '').trim();
-  const answer = String(parsed.answer || '').trim();
-  if (!question || !answer) throw new Error('model output missing question/answer');
-  return { question, answer };
+
+  return {
+    puzzle: candidates[Math.floor(Math.random() * candidates.length)],
+    cycleReset,
+    // How many of this cycle's posts precede this one — 0 right after a reset.
+    postedBefore: cycleReset ? 0 : posted.size,
+  };
 }
 
-function buildPost(question, answer) {
+// Same shape as before: header, question, spoiler-hidden answer, footer. The
+// spoiler now carries the explanation as well, on its own line, so one tap
+// reveals both the answer and why it is the answer.
+function buildPost(question, answer, explanation) {
+  const revealed = explanation
+    ? `${escapeHtml(answer)}\n${escapeHtml(explanation)}`
+    : escapeHtml(answer);
   return (
     '🧠 <b>СредаIQ — прокачай интеллект</b>\n\n' +
     `${escapeHtml(question)}\n\n` +
-    `<b>Ответ:</b> <tg-spoiler>${escapeHtml(answer)}</tg-spoiler>\n\n` +
+    `<b>Ответ:</b> <tg-spoiler>${revealed}</tg-spoiler>\n\n` +
     '🎯 <i>PulseIQ — интеллектуальные игры в Брисбене</i>'
   );
+}
+
+// Static safety net, used only when the bank is unavailable or the bank post
+// itself failed. Vercel records the cron as a success either way, so the log
+// line is the only signal that the intended source didn't run.
+async function postStaticFallback(res, reason) {
+  console.error('[send-weekly] FALLBACK_USED — posted static content instead of a bank puzzle:', reason);
+  const weekNumber = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
+  const post = fallbackPosts[weekNumber % fallbackPosts.length];
+  try {
+    await sendMessage(post.content);
+  } catch (err) {
+    // Both the bank post and the safety net failed — nothing reached the
+    // channel, so say so with a non-200 rather than reporting a silent success.
+    console.error('[send-weekly] static fallback also failed to send:', err.stack || err.message);
+    return res.status(500).json({ ok: false, error: err.message, reason });
+  }
+  return res.status(200).json({
+    ok: true,
+    source: 'fallback',
+    degraded: true,
+    reason,
+    postId: post.id,
+  });
 }
 
 module.exports = async function handler(req, res) {
@@ -134,31 +154,31 @@ module.exports = async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  try {
-    const recent = await getRecentPuzzles();
-    const { question, answer } = await generatePuzzle(recent);
-    await sendMessage(buildPost(question, answer));
-    await appendRecentPuzzle(question);
-    return res.status(200).json({ ok: true, source: 'generated' });
-  } catch (err) {
-    // Distinct, greppable marker: the weekly post went out as *static* content
-    // instead of a freshly generated puzzle. Vercel records the cron as a success
-    // either way, so this line is the only signal that generation is broken —
-    // alert on "FALLBACK_USED" in the logs.
-    console.error(
-      '[send-weekly] FALLBACK_USED — LLM generation failed, posted static fallback:',
-      err.stack || err.message
-    );
-    const weekNumber = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
-    const post = fallbackPosts[weekNumber % fallbackPosts.length];
-    // Still post: static content beats no post at all.
-    await sendMessage(post.content);
-    return res.status(200).json({
-      ok: true,
-      source: 'fallback',
-      degraded: true,
-      reason: err.message,
-      postId: post.id,
-    });
+  if (!bank) {
+    return postStaticFallback(res, 'weekly-puzzles.json unavailable (see BANK_UNAVAILABLE above)');
   }
+
+  let picked;
+  try {
+    picked = await pickFromBank(bank);
+    await sendMessage(buildPost(picked.puzzle.question, picked.puzzle.answer, picked.puzzle.explanation));
+  } catch (err) {
+    return postStaticFallback(res, err.stack || err.message);
+  }
+
+  const { puzzle, cycleReset, postedBefore } = picked;
+  // Mark only after the send succeeded, so a failed post doesn't burn a puzzle.
+  await markPuzzlePosted(puzzle.id);
+  console.log(
+    `[send-weekly] posted bank puzzle ${puzzle.id} (${postedBefore + 1}/${bank.length} this cycle${cycleReset ? ', new cycle' : ''})`
+  );
+
+  return res.status(200).json({
+    ok: true,
+    source: 'bank',
+    puzzleId: puzzle.id,
+    cyclePosted: postedBefore + 1,
+    bankSize: bank.length,
+    cycleReset,
+  });
 };
