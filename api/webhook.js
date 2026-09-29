@@ -83,7 +83,7 @@ module.exports = async function handler(req, res) {
     else if (voice.start && !['puzzle', 'hint', 'answer', 'chat'].includes(intent)) {
       persona = voice.next;
       if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
-      const fallbacks = ['Ну что, устроимся поудобнее? Можем за жизнь поболтать, а можем загадку раскрутить.', 'Я на связи. Какой сегодня расклад — поговорим или голову над загадкой поломаем?', 'О, заглянули на огонёк. Рассказывай, что нового — или подкинуть задачку?'];
+      const fallbacks = ['Ну, присаживайся, перетрём. Базар спокойный — можно за жизнь, можно одно дельце на сообразительность раскрутить.', 'О, вот и компания нарисовалась. Не гони лошадей, устраивайся: что у тебя за история?', 'Заглянули на огонёк — дело верное. Тут без понтов: поговорим по душам или загадку распутаем.'];
       reply = fallbacks[Math.floor(Math.random() * fallbacks.length)];
       const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
       if (!budgets.includes(false)) {
