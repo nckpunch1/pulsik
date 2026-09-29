@@ -68,3 +68,14 @@ test('bank validator rejects duplicate IDs, missing fields and long puzzles', ()
   assert.throws(() => validateBank({ puzzles: [{ ...p, answer: '' }] }, 'test'));
   assert.throws(() => validateBank({ puzzles: [{ ...p, question: 'x'.repeat(3001) }] }, 'test'));
 });
+test('model failures record safe reason codes without provider text', async () => {
+  const events = []; let calls = 0;
+  class Groq { constructor() { this.chat = { completions: { create: async () => {
+    if (++calls === 1) throw Object.assign(Error('sensitive provider body'), { status: 429 });
+    return { choices: [{ message: { content: 'partial' }, finish_reason: 'length' }] };
+  } } }; } }
+  const llm = load('lib/llm.js', { 'groq-sdk': Groq, './observability': { event: (name, fields) => events.push({ name, ...fields }) } });
+  await assert.rejects(llm.complete([]));
+  assert.equal(events[0].code, 'http_429'); assert.equal(events[1].code, 'truncated_output');
+  assert.doesNotMatch(JSON.stringify(events), /sensitive provider body|partial/);
+});

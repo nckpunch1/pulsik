@@ -61,3 +61,16 @@ test('ordinary phrases support the entire puzzle flow and combined persona reque
   await h.run(message(7, 'давай поболтаем')); assert.equal((await h.store.get('puzzle:1:0:1')).active, null);
   for (const sent of h.sent) assert.doesNotMatch(sent.text, /\/[a-z]+/);
 });
+test('Russian case endings activate persona through its resilient introduction path', async () => {
+  for (const text of ['хочу поговорить с блатным пульсиком', 'позови блатного пульсика', 'давай к блатному пульсику', 'Блатной Пульсик!']) {
+    assert.equal(personaState(text, null, null, true).start, true, text);
+  }
+  for (const text of ['не хочу говорить с блатным пульсиком', 'блатной сюжет у пульсика', 'блатной пульсиковый']) assert.equal(personaState(text, null, null, true).start, false, text);
+  const h = webhookHarness({ cfg: { personaEnabled: true }, generate: async () => { throw Error('provider outage'); } });
+  await h.run(message(1, 'хочу поговорить с блатным пульсиком'));
+  assert.equal((await h.store.get('persona:1:0:1')).mode, 'blatnoy');
+  assert.doesNotMatch(h.sent[0].text, /Сейчас не получается ответить/);
+  await h.run(message(2, 'как дела?'));
+  assert.match(h.sent[1].text, /в том же образе/);
+  assert.equal((await h.store.get('persona:1:0:1')).mode, 'blatnoy');
+});

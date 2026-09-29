@@ -126,7 +126,7 @@ module.exports = async function handler(req, res) {
         const puzzleContext = pendingPuzzle ? `Сейчас есть открытая загадка: ${pendingPuzzle.question}\nЭта реплика распознана как разговор, а не попытка ответа. Ответь на неё в текущем образе. Не оценивай её как решение, не раскрывай и не угадывай ответ. Загадку можно продолжить позже.` : intent === 'chat' ? 'Собеседник хочет поболтать. Продолжи текущую беседу в выбранном образе; не здоровайся заново и не навязывай загадки.' : '';
         const system = `${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}\n\n${puzzleContext}`;
         try { reply = await generateReply(system, history, context, text, { deadline: Math.min(deadline - 12000, Date.now() + 22000) }); remember = true; }
-        catch { reply = 'Сейчас не получается ответить. Попробуй чуть позже; можно попросить «дай загадку» — они доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
+        catch { reply = voice.active ? 'Эх, связь подвела — мысль до меня не дошла. Я всё ещё здесь, в том же образе. Давай попробуем чуть позже.' : 'Сейчас не получается ответить. Попробуй чуть позже; можно попросить «дай загадку» — они доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
       }
     }
     if (Date.now() > deadline - 9000 || !await store.owns(updateLock) || !await store.owns(userLock)) throw new Error('Deadline or lock expired');
