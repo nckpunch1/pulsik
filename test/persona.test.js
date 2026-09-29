@@ -12,7 +12,7 @@ test('persona activation and puzzle question/hint/solution all use the active vo
   assert.match(h.sent[1].text, /дело занятное/); assert.ok(h.sent[1].text.includes(p.question));
   await h.run(message(3, '/hint')); assert.match(h.sent[2].text, /Подкину зацепку/); assert.ok(h.sent[2].text.includes(p.hints[0]));
   await h.run(message(4, '/answer')); assert.match(h.sent[3].text, /Раскрываем карты/); assert.ok(h.sent[3].text.includes(p.answer));
-  assert.equal(h.prompts.length, 0);
+  assert.equal(h.prompts.length, 1);
 });
 test('correct answers and unmatched guesses preserve persona without changing correctness', () => {
   const state = { active: 'c006', seen: ['c006'], hints: 0 };
@@ -39,4 +39,25 @@ test('activation works inside an existing puzzle and switch-off disables puzzle 
   await h.run(message(1, '/puzzle')); await h.run(message(2, 'Блатной Пульсик')); await h.run(message(3, '/hint'));
   assert.match(h.sent[2].text, /Подкину зацепку/);
   assert.equal(personaState('/hint', { remaining: 4, expiresAt: Date.now() + 1000 }, { voice: 'blatnoy', voiceUntil: Date.now() + 1000 }, false).active, false);
+});
+test('intro is generated in character and falls back without command menus', async () => {
+  const h = webhookHarness({ cfg: { personaEnabled: true } });
+  await h.run(message(1, 'Блатной Пульсик'));
+  assert.equal(h.sent[0].text, 'reply'); assert.match(h.prompts[0][0], /Без списка команд/);
+  const failed = webhookHarness({ cfg: { personaEnabled: true }, generate: async () => { throw Error('offline'); } });
+  await failed.run(message(1, 'Блатной Пульсик'));
+  assert.doesNotMatch(failed.sent[0].text, /\/[a-z]+/);
+  assert.equal((await failed.store.get('persona:1:0:1')).remaining, 4);
+});
+test('ordinary phrases support the entire puzzle flow and combined persona request', async () => {
+  const h = webhookHarness({ cfg: { personaEnabled: true } });
+  await h.run(message(1, 'Блатной Пульсик, дай мне загадку, пожалуйста'));
+  assert.match(h.sent[0].text, /дело занятное/); assert.equal(h.prompts.length, 0);
+  await h.run(message(2, 'подскажи')); assert.match(h.sent[1].text, /Подкину зацепку/);
+  await h.run(message(3, 'скажи ответ')); assert.match(h.sent[2].text, /Раскрываем карты/);
+  await h.run(message(4, 'ещё загадку'));
+  await h.run(message(5, 'говори нормально'));
+  await h.run(message(6, 'дай подсказку')); assert.doesNotMatch(h.sent[5].text, /Подкину зацепку/);
+  await h.run(message(7, 'давай поболтаем')); assert.equal((await h.store.get('puzzle:1:0:1')).active, null);
+  for (const sent of h.sent) assert.doesNotMatch(sent.text, /\/[a-z]+/);
 });

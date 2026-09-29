@@ -9,11 +9,12 @@ const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
 const { puzzleTurn } = require('../lib/chat-puzzles');
 const { event } = require('../lib/observability');
+const { conversationIntent } = require('../lib/conversation-intent');
 const { personaState } = require('../lib/persona-state');
 const { COMMANDS: OVERVIEW_COMMANDS, createOverviewCommands } = require('../lib/game-overview');
 const overviewCommand = createOverviewCommands({ store, sendMessage, getUpcomingSessions, complete });
 
-const HELP = 'Я Пульсик, ИИ-бот PulseIQ. Можно просто поболтать!\n/puzzle — загадка в личке\n/hint — подсказка\n/answer — решение\n/chat — закончить загадку и болтать\n/privacy — о данных\n/forget — удалить сохранённую память\n/whoami — мой числовой Telegram ID\nВ группе отвечаю на упоминание, имя «Пульсик» или ответ на моё сообщение. Игры и регистрация: player.pulseiq.com.au';
+const HELP = 'Я Пульсик, ИИ-бот PulseIQ. Можно просто поболтать!\nХочешь размяться? Скажи «дай загадку».\nМожно попросить «дай подсказку», «скажи ответ» или «давай поболтаем».\n/privacy — о данных\n/forget — удалить сохранённую память\n/whoami — мой числовой Telegram ID\nВ группе отвечаю на упоминание, имя «Пульсик» или ответ на моё сообщение. Игры и регистрация: player.pulseiq.com.au';
 const PRIVACY = 'Я ИИ-бот. Текст обращений и последние 20 сообщений нашей беседы могут передаваться Groq для ответа. Память разделена по чатам и темам; сообщения старше 7 дней не используются. История загадок удаляется после 7 дней бездействия. /forget удаляет твою сохранённую память во всех чатах бота, включая индексируемые цитаты из групп. Это не удаляет сообщения в Telegram или данные, уже обработанные провайдерами. Технические записи доставки не содержат текст переписки. Админские заметки для анонсов хранятся отдельно 30 дней, черновики — сутки; удалить заметки можно через /gameclear. Для создания анонса заметки передаются Groq.';
 
 module.exports = async function handler(req, res) {
@@ -68,18 +69,34 @@ module.exports = async function handler(req, res) {
     if (allowed.includes(false)) { await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
     let reply, puzzle, persona, replyHtml = false, remember = false;
     const gameState = !control ? await store.get(`puzzle:${scopeId}`) : null;
+    const intent = conversationIntent(text, Boolean(gameState?.active));
     const voice = !control ? personaState(text, cfg.personaEnabled ? await store.get(`persona:${scopeId}`) : null, gameState, cfg.personaEnabled) : { active: false };
     if (overviewControl) { const result = await overviewCommand({ text, cfg, userId, updateId: update.update_id, deadline }); reply = result.reply; replyHtml = Boolean(result.html); }
     else if (statusCommand) reply = buildStatusReport(await store.get(store.rotationName()));
-    else if (command === '/start' || command === '/help') reply = HELP + (cfg.personaEnabled ? '\n/blatnoy — театральный образ, /normal — обычный голос.' : '') + (privateChat && cfg.operators.includes(userId) ? '\nДля анонса: /gamebrief, /overview, /publish КОД. Заметки видны только администраторам.' : '');
+    else if (command === '/start' || command === '/help') reply = HELP + (cfg.personaEnabled ? '\nПозови «Блатной Пульсик», если хочется другого настроения. «Говори нормально» — вернуться к обычному голосу.' : '') + (privateChat && cfg.operators.includes(userId) ? '\nДля анонса: /gamebrief, /overview, /publish КОД. Заметки видны только администраторам.' : '');
     else if (command === '/privacy') reply = PRIVACY + (cfg.groupContext ? '\nСбор контекста групп включён: последние 20 коротких цитат могут использоваться в пределах этой группы/темы.' : '\nФоновый сбор сообщений групп отключён.');
     else if (command === '/whoami') reply = privateChat ? `Твой Telegram user ID: ${userId}. Username сам по себе не даёт прав администратора.` : 'Напиши /whoami мне в личку.';
     else if (command === '/forget') { await store.forget(userId); reply = 'Сохранённая память и история загадок удалены. Новые обращения начнут новую историю.'; }
     else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = 'Снова обычный Пульсик. Если загадка ещё открыта, продолжаем её.'; }
-    else if (voice.start) { persona = voice.next; if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt }; reply = 'Шляпу поправил, чай налил. Блатной Пульсик на связи — без суеты, но с интересом. Загадку — /puzzle, обратно без образа — /normal.'; }
+    else if (voice.start && !['puzzle', 'hint', 'answer', 'chat'].includes(intent)) {
+      persona = voice.next;
+      if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
+      const fallbacks = ['Ну что, устроимся поудобнее? Можем за жизнь поболтать, а можем загадку раскрутить.', 'Я на связи. Какой сегодня расклад — поговорим или голову над загадкой поломаем?', 'О, заглянули на огонёк. Рассказывай, что нового — или подкинуть задачку?'];
+      reply = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+      const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
+      if (!budgets.includes(false)) {
+        const history = await store.history(scopeId);
+        const introRules = 'Собеседник позвал Блатного Пульсика. Ответь живым коротким вступлением в образе (1–3 предложения). Учитывай его реплику и недавний разговор, не повторяй прежнее вступление. Без списка команд, слеш-команд и технических объяснений режима. Не используй каждый раз шляпу, чай или «на связи». Можно предложить поболтать или загадку обычными словами, но не задавай саму загадку и не раскрывай ответ. Не придумывай факты об играх. Если загадка уже открыта, предложи продолжить её.';
+        try {
+          const intro = await generateReply(`${BLATNOY_PERSONALITY_PROMPT}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${introRules}\nОткрытая загадка: ${Boolean(gameState?.active && !gameState.completed)}.`, history, [], text, { maxTokens: 700, deadline: Math.min(deadline - 12000, Date.now() + 22000) });
+          if (intro.length <= 700 && !/\/[a-z]+/i.test(intro)) reply = intro;
+        } catch { event('PERSONA_INTRO_FALLBACK', { updateId: update.update_id }); }
+      }
+      remember = true;
+    }
     else if (command === '/blatnoy') reply = 'Театральный образ пока выключен. Обычный Пульсик на месте!';
-    else if (command === '/chat') { puzzle = { seen: (await store.get(`puzzle:${scopeId}`))?.seen || [], active: null, completed: true, hints: 0 }; persona = voice.next; reply = voice.active ? 'Дело пока отложим. Чай не остыл — можно за жизнь поболтать.' : 'Загадку отложили. О чём поболтаем?'; }
-    else if (group && ['/puzzle', '/hint', '/answer'].includes(command)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
+    else if (intent === 'chat') { puzzle = { seen: (await store.get(`puzzle:${scopeId}`))?.seen || [], active: null, completed: true, hints: 0 }; persona = voice.next; reply = voice.active ? 'Дело пока отложим. Чай не остыл — можно за жизнь поболтать.' : 'Загадку отложили. О чём поболтаем?'; }
+    else if (group && ['puzzle', 'hint', 'answer'].includes(intent)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
     else {
       const turn = privateChat ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active }) : null;
       if (turn) { reply = turn.reply; puzzle = { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; }
@@ -92,7 +109,7 @@ module.exports = async function handler(req, res) {
         const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
         const system = `${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}`;
         try { reply = await generateReply(system, history, context, text, { deadline: Math.min(deadline - 12000, Date.now() + 22000) }); remember = true; }
-        catch { reply = 'Сейчас не получается ответить. Попробуй чуть позже; загадки /puzzle доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
+        catch { reply = 'Сейчас не получается ответить. Попробуй чуть позже; можно попросить «дай загадку» — они доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
       }
     }
     if (Date.now() > deadline - 9000 || !await store.owns(updateLock) || !await store.owns(userLock)) throw new Error('Deadline or lock expired');
