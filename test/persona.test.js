@@ -20,11 +20,11 @@ test('correct answers and unmatched guesses preserve persona without changing co
   assert.match(wrong.reply, /С приговором погодим/); assert.ok(!wrong.state.completed); assert.doesNotMatch(wrong.reply, /39/);
   const correct = puzzleTurn('39', state, () => 0, { blatnoy: true }); assert.equal(correct.state.completed, true); assert.match(correct.reply, /расклад сошёлся/);
 });
-test('puzzle keeps voice until completion even if the short conversation budget runs out', () => {
+test('legacy persona stays selected after puzzle completion and migrates to durable preference', () => {
   const now = Date.now(), stored = { remaining: 0, expiresAt: now + 1000 };
   const game = { active: 'c006', voice: 'blatnoy', voiceUntil: now + 1000, completed: false };
   assert.equal(personaState('/hint', stored, game, true, now).active, true);
-  assert.equal(personaState('hello', stored, { ...game, completed: true }, true, now).active, false);
+  assert.equal(personaState('hello', stored, { ...game, completed: true }, true, now).active, true);
   assert.equal(personaState('/hint', stored, game, true, now + 2000).active, false);
 });
 test('/normal exits during a puzzle; other users and rooms are isolated', async () => {
@@ -47,7 +47,7 @@ test('intro is generated in character and falls back without command menus', asy
   const failed = webhookHarness({ cfg: { personaEnabled: true }, generate: async () => { throw Error('offline'); } });
   await failed.run(message(1, 'Блатной Пульсик'));
   assert.doesNotMatch(failed.sent[0].text, /\/[a-z]+/);
-  assert.equal((await failed.store.get('persona:1:0:1')).remaining, 4);
+  assert.equal((await failed.store.get('persona:1:0:1')).mode, 'blatnoy');
 });
 test('ordinary phrases support the entire puzzle flow and combined persona request', async () => {
   const h = webhookHarness({ cfg: { personaEnabled: true } });

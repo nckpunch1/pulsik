@@ -9,6 +9,8 @@ const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
 const { puzzleTurn } = require('../lib/chat-puzzles');
 const { event } = require('../lib/observability');
+const { understandPuzzle, understoodTurn } = require('../lib/puzzle-understanding');
+const { getChatBank } = require('../lib/puzzle-bank');
 const { conversationIntent } = require('../lib/conversation-intent');
 const { personaState } = require('../lib/persona-state');
 const { COMMANDS: OVERVIEW_COMMANDS, createOverviewCommands } = require('../lib/game-overview');
@@ -95,19 +97,34 @@ module.exports = async function handler(req, res) {
       remember = true;
     }
     else if (command === '/blatnoy') reply = 'Театральный образ пока выключен. Обычный Пульсик на месте!';
-    else if (intent === 'chat') { puzzle = { seen: (await store.get(`puzzle:${scopeId}`))?.seen || [], active: null, completed: true, hints: 0 }; persona = voice.next; reply = voice.active ? 'Дело пока отложим. Чай не остыл — можно за жизнь поболтать.' : 'Загадку отложили. О чём поболтаем?'; }
     else if (group && ['puzzle', 'hint', 'answer'].includes(intent)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
     else {
-      const turn = privateChat ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active }) : null;
-      if (turn) { reply = turn.reply; puzzle = { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; }
-      else if (command.startsWith('/')) reply = HELP;
-      else {
+      let modelAdmitted = false;
+      const admitModel = async () => {
+        if (modelAdmitted) return true;
         const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
-        if (budgets.includes(false)) { event('GLOBAL_BUDGET_REACHED'); await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
+        modelAdmitted = !budgets.includes(false); return modelAdmitted;
+      };
+      if (intent === 'chat') puzzle = { ...gameState, seen: gameState?.seen || [], active: null, completed: true, hints: 0 };
+      let turn = privateChat && intent !== 'chat' ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active, deferUnknown: true }) : null;
+      if (turn?.needsUnderstanding) {
+        let kind = 'uncertain';
+        if (await admitModel()) {
+          try { kind = await understandPuzzle(text, gameState, complete, { maxTokens: 400, deadline: Math.min(deadline - 24000, Date.now() + 9000) }); }
+          catch { event('PUZZLE_INTERPRETATION_UNAVAILABLE', { updateId: update.update_id }); }
+        }
+        turn = kind === 'chat' ? null : understoodTurn(kind, text, gameState, voice.active);
+      }
+      if (turn) { reply = turn.reply; puzzle = { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; remember = true; }
+      else if (command.startsWith('/') && intent !== 'chat') reply = HELP;
+      else {
+        if (!await admitModel()) { event('GLOBAL_BUDGET_REACHED'); await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
         const [history, context, sessions] = await Promise.all([store.history(scopeId), group && cfg.groupContext ? store.context(roomId) : [], getUpcomingSessions({ deadline: Math.min(deadline - 18000, Date.now() + 2500) })]);
         persona = voice.next;
         const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
-        const system = `${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}`;
+        const pendingPuzzle = privateChat && intent !== 'chat' && gameState?.active && !gameState.completed ? getChatBank().find(p => p.id === gameState.active) : null;
+        const puzzleContext = pendingPuzzle ? `Сейчас есть открытая загадка: ${pendingPuzzle.question}\nЭта реплика распознана как разговор, а не попытка ответа. Ответь на неё в текущем образе. Не оценивай её как решение, не раскрывай и не угадывай ответ. Загадку можно продолжить позже.` : intent === 'chat' ? 'Собеседник хочет поболтать. Продолжи текущую беседу в выбранном образе; не здоровайся заново и не навязывай загадки.' : '';
+        const system = `${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}\n\n${puzzleContext}`;
         try { reply = await generateReply(system, history, context, text, { deadline: Math.min(deadline - 12000, Date.now() + 22000) }); remember = true; }
         catch { reply = 'Сейчас не получается ответить. Попробуй чуть позже; можно попросить «дай загадку» — они доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
       }

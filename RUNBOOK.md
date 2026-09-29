@@ -13,7 +13,7 @@ Use a separate test bot and private test channel + linked discussion group. Star
 - Register the test webhook with its own secret. Send `/whoami`, `/start`, `/privacy`, `/forget` in DMs. Confirm operator status is denied to a second test user and in groups.
 - Enable chat mode. Check Russian and English conversation, direct mention, name trigger and replies to this bot. Replies to a different bot must not trigger it. Replies in a topic must stay in that topic.
 - Send a private sentinel then ask in the group: it must not enter that group's model input. Check `/forget` from a DM after conversations in multiple rooms.
-- Test `/puzzle`, canonical answer, alternate phrasing, `/hint`, `/answer`, `/chat`, and a new puzzle. The model does not grade freeform alternatives; the member can compare the canonical solution.
+- Test `/puzzle`, canonical answer, alternate phrasing, `/hint`, `/answer`, `/chat`, and a new puzzle. Test freeform alternatives and emotional wording: the model classifies their meaning against the canonical solution. Test unrelated small talk mid-puzzle and interpretation outages; uncertain cases should ask for clarification without revealing the solution.
 - Initialize test rotation. Inspect a locally built weekly post and spoiler HTML. For a real scheduled delivery rehearsal, use a Wednesday slot in the test environment or invoke the send helper with a selected post in the private test channel without consuming production state.
 - Confirm duplicate weekly calls and replayed update IDs do not send again. Regression tests cover outage paths without sending real messages.
 - Configure the external monitor and verify operator alerts can reach the operator's private chat. Health sends alerts only for actionable issues.

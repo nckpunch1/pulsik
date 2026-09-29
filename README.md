@@ -4,7 +4,7 @@ Telegram companion for PulseIQ. Production reference: https://pulsik.vercel.app/
 
 - Weekly **СредаIQ**: Wednesday 09:00 UTC / 19:00 Brisbane, drawn from a curated bank and posted with a spoiler answer.
 - Member conversations: DMs and explicitly allowed discussion groups/topics. Broadcast channel messages are ignored.
-- Private puzzles: `/puzzle`, `/hint`, `/answer`, `/chat`. Puzzle state and canonical answers come from the bank, not model invention. Unrecognized answers are never automatically labelled wrong.
+- Private puzzles: `/puzzle`, `/hint`, `/answer`, `/chat`. Puzzle state and canonical answers come from the bank, not model invention. Exact aliases are checked locally; other replies use a bounded model classification against the canonical solution to distinguish guesses from conversation. Uncertain or failed classifications request clarification.
 - `/start`, `/help`, `/privacy`, `/forget`, `/whoami` work while conversation mode is paused.
 - `/bankstatus`: private, operator-only status. The old phrase is recognized for compatibility but never authorizes access by itself.
 
@@ -52,7 +52,7 @@ Copy `.env.example` to an ignored `.env` for local operations. Put actual produc
 | `WEEKLY_START_DATE` | First approved weekly Wednesday date, required when weekly posting is enabled. |
 | `GROUP_CONTEXT_ENABLED` | Optional background collection of recent group text, defaults off. Enable only with a member-facing notice. |
 | `ALTERNATE_PERSONA_ENABLED` | Optional theatrical persona, defaults off. Shared business/privacy rules remain in force. |
-| `GLOBAL_DAILY_REPLY_LIMIT` | Maximum admitted model-backed turns per UTC day; default 300. Each can make up to two model attempts. |
+| `GLOBAL_DAILY_REPLY_LIMIT` | Maximum admitted model-backed turns per UTC day; default 300. A conversational puzzle turn can make up to four model attempts (interpretation plus reply); ordinary turns make up to two. |
 | `GLOBAL_MINUTE_REPLY_LIMIT` | Maximum admitted model-backed turns per rolling fixed window; default 30. |
 
 Set a hard spend limit in the Groq account as well. The application cap bounds requests, not exact currency spend. User/chat reply limits are 10/20 per minute. Non-conversational background context is only stored when explicitly enabled.
@@ -87,7 +87,7 @@ Health checks run daily at 10:00 UTC, an hour after the weekly slot. `/api/healt
 
 ## Persona and game overviews
 
-With `ALTERNATE_PERSONA_ENABLED=true`, a member can use `/blatnoy` (or ask for Блатной Пульсик) and `/normal` to switch back. The voice is scoped to that user, chat and topic. It lasts four conversational turns, at most one hour; an unfinished private puzzle keeps the voice through its hints and solution within that hour. Bank facts and answers are never rewritten. Scheduled channel puzzles use the shared СредаIQ format: an individual member's persona does not change a public broadcast.
+With `ALTERNATE_PERSONA_ENABLED=true`, a member can use `/blatnoy` (or ask for Блатной Пульсик) and `/normal` to switch back. The voice is scoped to that user, chat and topic. It stays selected across puzzle completion and ordinary chat until the member switches back or uses `/forget`; like other memory, it expires after seven inactive days. Canonical bank facts and explanations are preserved; model-based interpretation of freeform answers can still be mistaken and should be checked during rehearsal. Scheduled channel puzzles use the shared СредаIQ format: an individual member's persona does not change a public broadcast.
 
 Operators can keep one temporary game brief per destination, separate from member memory. In the bot's **private chat**:
 
