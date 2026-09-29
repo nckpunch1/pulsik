@@ -1,187 +1,125 @@
 'use strict';
-
+const { config, authorized } = require('../lib/config');
+const store = require('../lib/redis');
 const { sendMessage } = require('../lib/telegram');
-const { generateReply } = require('../lib/llm');
+const { generateReply, complete } = require('../lib/llm');
 const { matchesStatusCommand, buildStatusReport } = require('../lib/bank-status');
-const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT, contextLine } = require('../lib/personality');
+const { PERSONALITY_PROMPT, BLATNOY_PERSONALITY_PROMPT, SHARED_RULES, contextLine } = require('../lib/personality');
 const { getUpcomingSessions } = require('../lib/sessions');
 const { formatSessionsForPrompt } = require('../lib/format');
-const {
-  getUserHistory,
-  appendToUserHistory,
-  getChannelContext,
-  appendToChannelContext,
-  getBlatnoyCounter,
-  setBlatnoyCounter,
-  decrementBlatnoyCounter,
-  checkRateLimit,
-  getPostedPuzzleIds,
-} = require('../lib/redis');
+const { puzzleTurn } = require('../lib/chat-puzzles');
+const { event } = require('../lib/observability');
+const { personaState } = require('../lib/persona-state');
+const { COMMANDS: OVERVIEW_COMMANDS, createOverviewCommands } = require('../lib/game-overview');
+const overviewCommand = createOverviewCommands({ store, sendMessage, getUpcomingSessions, complete });
 
-const BOT_USERNAME = 'pulse_iq_bot';
-const MENTION = `@${BOT_USERNAME}`;
-
-// Caps LLM cost per message and blunts prompt-stuffing via giant messages
-const MAX_USER_MESSAGE_CHARS = 1000;
-// Per-minute reply budgets; exceeding them silently drops the message
-const USER_RATE_LIMIT = 10;
-const CHAT_RATE_LIMIT = 20;
+const HELP = 'Я Пульсик, ИИ-бот PulseIQ. Можно просто поболтать!\n/puzzle — загадка в личке\n/hint — подсказка\n/answer — решение\n/chat — закончить загадку и болтать\n/privacy — о данных\n/forget — удалить сохранённую память\n/whoami — мой числовой Telegram ID\nВ группе отвечаю на упоминание, имя «Пульсик» или ответ на моё сообщение. Игры и регистрация: player.pulseiq.com.au';
+const PRIVACY = 'Я ИИ-бот. Текст обращений и последние 20 сообщений нашей беседы могут передаваться Groq для ответа. Память разделена по чатам и темам; сообщения старше 7 дней не используются. История загадок удаляется после 7 дней бездействия. /forget удаляет твою сохранённую память во всех чатах бота, включая индексируемые цитаты из групп. Это не удаляет сообщения в Telegram или данные, уже обработанные провайдерами. Технические записи доставки не содержат текст переписки. Админские заметки для анонсов хранятся отдельно 30 дней, черновики — сутки; удалить заметки можно через /gameclear. Для создания анонса заметки передаются Groq.';
 
 module.exports = async function handler(req, res) {
-  // Fail closed: without the secret anyone who finds the URL can spoof updates
-  // and drive LLM calls / bot replies.
-  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!secret) {
-    console.error('[webhook] TELEGRAM_WEBHOOK_SECRET is not set — refusing to process updates');
-    return res.status(500).json({ error: 'Webhook secret is not configured' });
-  }
-  const incoming = req.headers['x-telegram-bot-api-secret-token'];
-  if (incoming !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const update = req.body;
-  const message = update && (update.message || update.channel_post);
-  if (!message) return res.status(200).json({ ok: true });
-
-  const text = message.text || message.caption || '';
-  if (!text) return res.status(200).json({ ok: true });
-
-  const chatId = String(message.chat.id);
-  const chatType = message.chat.type; // "private", "group", "supergroup", "channel"
-  const from = message.from || {};
-  const userId = String(from.id || 'unknown');
-  const username = from.username
-    ? `@${from.username}`
-    : (from.first_name || 'User');
-
-  // Skip messages from the bot itself
-  if (from.username === BOT_USERNAME) return res.status(200).json({ ok: true });
-
-  // Never respond in broadcast channels
-  if (chatType === 'channel') return res.status(200).json({ ok: true });
-
-  // Operator command, answered before any of the conversational machinery: it
-  // must not reach the LLM, must not land in the chat context or user history
-  // (the bank's state is operator business, not something for the persona to
-  // riff on), and must work identically in a DM and a group. The numeric code
-  // in the phrase is the gate — see lib/bank-status.js.
-  if (matchesStatusCommand(text)) {
-    console.log(`[webhook] bank status requested by ${username} (${userId}) in chat ${chatId}`);
-    const report = buildStatusReport(await getPostedPuzzleIds());
-    await sendMessage(report, chatId);
-    return res.status(200).json({ ok: true, command: 'bank-status' });
-  }
-
-  const isPrivate = chatType === 'private';
-  const isGroup = chatType === 'group' || chatType === 'supergroup';
-
-  // Group chats: record context and require one of three triggers
-  if (isGroup) {
-    await appendToChannelContext(chatId, username, text);
-
-    const mentioned =
-      text.toLowerCase().includes(MENTION.toLowerCase()) ||
-      (message.entities || []).some(
-        e => e.type === 'mention' &&
-             text.slice(e.offset, e.offset + e.length).toLowerCase() === MENTION.toLowerCase()
-      );
-
-    const namedPulsik = text.toLowerCase().includes('пульсик');
-
-    const replyToBot =
-      message.reply_to_message?.from?.username === BOT_USERNAME ||
-      message.reply_to_message?.from?.is_bot === true;
-
-    if (!mentioned && !namedPulsik && !replyToBot) {
+  const started = Date.now(), deadline = started + 48000;
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  let cfg;
+  try { cfg = config(); } catch { event('CONFIGURATION_FAILURE'); return res.status(503).json({ error: 'Bot not configured' }); }
+  if (!authorized(req.headers['x-telegram-bot-api-secret-token'], cfg.webhookSecret)) return res.status(401).json({ error: 'Unauthorized' });
+  const update = req.body, m = update?.message;
+  if (!m) return res.status(200).json({ ok: true });
+  const privateChat = m.chat?.type === 'private', group = ['group', 'supergroup'].includes(m.chat?.type);
+  if ((!privateChat && !group) || !Number.isSafeInteger(m.from?.id) || m.from.is_bot || m.sender_chat || !Number.isSafeInteger(m.chat?.id)) return res.status(200).json({ ok: true });
+  if (!Number.isSafeInteger(update.update_id) || !Number.isSafeInteger(m.message_id)) return res.status(400).json({ error: 'Invalid update' });
+  if (m.date && m.date * 1000 < Date.now() - 7 * 86400000) return res.status(200).json({ ok: true, stale: true });
+  const chatId = String(m.chat.id), userId = String(m.from.id), topicId = m.message_thread_id || 0;
+  if (group && !cfg.groups.includes(chatId)) return res.status(200).json({ ok: true });
+  let text = m.text || m.caption || '';
+  if (typeof text !== 'string' || !text.trim()) return res.status(200).json({ ok: true });
+  const commandTarget = text.match(/^\/[a-z]+@([a-z0-9_]+)/i)?.[1];
+  if (commandTarget && commandTarget.toLowerCase() !== cfg.username.toLowerCase()) return res.status(200).json({ ok: true });
+  text = text.replace(/^\/(\w+)@\w+/i, '/$1');
+  const command = text.trim().split(/\s+/)[0].toLowerCase();
+  if (cfg.privateTest && (!privateChat || (!cfg.operators.includes(userId) && !['/whoami', '/privacy', '/forget'].includes(command)))) return res.status(200).json({ ok: true, testing: true });
+  const overviewControl = OVERVIEW_COMMANDS.has(command);
+  if (!overviewControl) text = text.slice(0, 1000);
+  const statusCommand = matchesStatusCommand(text);
+  // Operational requests never enter the LLM or shared context, including unauthorized ones.
+  if ((statusCommand || overviewControl) && (!privateChat || !cfg.operators.includes(userId))) return res.status(200).json({ ok: true });
+  const control = ['/start', '/help', '/privacy', '/forget', '/whoami'].includes(command) || statusCommand || overviewControl;
+  if (!cfg.chatEnabled && !control) return res.status(200).json({ ok: true, paused: true });
+  const addressed = privateChat || control || text.toLowerCase().includes(`@${cfg.username.toLowerCase()}`) || /(?:^|[^\p{L}])пульсик(?:$|[^\p{L}])/iu.test(text) || String(m.reply_to_message?.from?.id) === cfg.botId;
+  if (!addressed && !cfg.groupContext) return res.status(200).json({ ok: true });
+  const scopeId = store.scope(chatId, userId, topicId), roomId = store.room(chatId, topicId);
+  let updateLock, userLock, sending = false;
+  try {
+    updateLock = await store.lock(`update:${update.update_id}`);
+    if (!updateLock) return res.status(503).json({ error: 'Update busy' });
+    const previous = await store.get(`update:${update.update_id}`);
+    if (previous && ['done', 'sending', 'uncertain'].includes(previous.state)) {
+      if (previous.state !== 'done') event('UPDATE_REQUIRES_REVIEW', { updateId: update.update_id, state: previous.state });
+      return res.status(200).json({ ok: true, duplicate: true });
+    }
+    if (previous?.retryAt > Date.now()) return res.status(503).json({ error: 'Retry later' });
+    // A user-wide lock also makes /forget atomic relative to that user's turns in other rooms.
+    userLock = await store.lock(`user:${userId}`);
+    if (!userLock) return res.status(503).json({ error: 'Conversation busy' });
+    if (!addressed) {
+      await store.finishUpdate(update.update_id, { roomId, userId, username: m.from.first_name || 'Участник', contextText: text });
       return res.status(200).json({ ok: true });
     }
-  }
-
-  // Rate-limit only messages we would actually answer
-  const [userAllowed, chatAllowed] = await Promise.all([
-    checkRateLimit(`user:${userId}`, USER_RATE_LIMIT, 60),
-    checkRateLimit(`chat:${chatId}`, CHAT_RATE_LIMIT, 60),
-  ]);
-  if (!userAllowed || !chatAllowed) {
-    console.warn(`[webhook] rate limit hit (user ${userId}, chat ${chatId})`);
-    return res.status(200).json({ ok: true });
-  }
-
-  // Strip @mention only in group context; pass full text in DMs
-  const userMessage = (isGroup
-    ? (text.replace(new RegExp(MENTION, 'gi'), '').trim() || '👋')
-    : (text || '👋')
-  ).slice(0, MAX_USER_MESSAGE_CHARS);
-
-  // Determine whether we're entering / continuing the Блатной Пульсик persona
-  const lowerText = text.toLowerCase();
-  const triggerActivation =
-    lowerText.includes('блатной') && lowerText.includes('пульсик');
-
-  try {
-    const blatnoyCounter = await getBlatnoyCounter(chatId, userId);
-
-    const isBlatnoyMode = triggerActivation || blatnoyCounter > 0;
-
-    const [userHistory, channelContext, sessions] = await Promise.all([
-      getUserHistory(userId),
-      isGroup ? getChannelContext(chatId) : Promise.resolve([]),
-      // Skip the schedule lookup entirely in persona mode — keep it pure character
-      isBlatnoyMode ? Promise.resolve([]) : getUpcomingSessions(),
-    ]);
-
-    let fullSystemPrompt;
-
-    if (triggerActivation) {
-      // Entering the persona — set 4-message budget and play a theatrical intro
-      await setBlatnoyCounter(chatId, userId, 4);
-      fullSystemPrompt =
-        BLATNOY_PERSONALITY_PROMPT +
-        '\n\nЭто твоё первое появление в роли. Войди в образ театрально и весело.';
-    } else if (blatnoyCounter > 0) {
-      // Continuing the persona — count this message and wind down on the last one
-      const isFinalBlatnoyMessage = blatnoyCounter === 1;
-      fullSystemPrompt = BLATNOY_PERSONALITY_PROMPT;
-      if (isFinalBlatnoyMessage) {
-        fullSystemPrompt +=
-          '\n\nЭто твоё последнее сообщение в роли Блатного Пульсика. Намекни, что чай остыл / луна зашла / пора в дорогу, и попрощайся с этой ролью с лёгким сожалением. После этого ты автоматически вернёшься к обычному стилю.';
+    const allowed = await Promise.all([store.rateLimit(`user:${userId}`, 10, 60), store.rateLimit(`chat:${chatId}`, 20, 60)]);
+    if (allowed.includes(false)) { await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
+    let reply, puzzle, persona, replyHtml = false, remember = false;
+    const gameState = !control ? await store.get(`puzzle:${scopeId}`) : null;
+    const voice = !control ? personaState(text, cfg.personaEnabled ? await store.get(`persona:${scopeId}`) : null, gameState, cfg.personaEnabled) : { active: false };
+    if (overviewControl) { const result = await overviewCommand({ text, cfg, userId, updateId: update.update_id, deadline }); reply = result.reply; replyHtml = Boolean(result.html); }
+    else if (statusCommand) reply = buildStatusReport(await store.get(store.rotationName()));
+    else if (command === '/start' || command === '/help') reply = HELP + (cfg.personaEnabled ? '\n/blatnoy — театральный образ, /normal — обычный голос.' : '') + (privateChat && cfg.operators.includes(userId) ? '\nДля анонса: /gamebrief, /overview, /publish КОД. Заметки видны только администраторам.' : '');
+    else if (command === '/privacy') reply = PRIVACY + (cfg.groupContext ? '\nСбор контекста групп включён: последние 20 коротких цитат могут использоваться в пределах этой группы/темы.' : '\nФоновый сбор сообщений групп отключён.');
+    else if (command === '/whoami') reply = privateChat ? `Твой Telegram user ID: ${userId}. Username сам по себе не даёт прав администратора.` : 'Напиши /whoami мне в личку.';
+    else if (command === '/forget') { await store.forget(userId); reply = 'Сохранённая память и история загадок удалены. Новые обращения начнут новую историю.'; }
+    else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = 'Снова обычный Пульсик. Если загадка ещё открыта, продолжаем её.'; }
+    else if (voice.start) { persona = voice.next; if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt }; reply = 'Шляпу поправил, чай налил. Блатной Пульсик на связи — без суеты, но с интересом. Загадку — /puzzle, обратно без образа — /normal.'; }
+    else if (command === '/blatnoy') reply = 'Театральный образ пока выключен. Обычный Пульсик на месте!';
+    else if (command === '/chat') { puzzle = { seen: (await store.get(`puzzle:${scopeId}`))?.seen || [], active: null, completed: true, hints: 0 }; persona = voice.next; reply = voice.active ? 'Дело пока отложим. Чай не остыл — можно за жизнь поболтать.' : 'Загадку отложили. О чём поболтаем?'; }
+    else if (group && ['/puzzle', '/hint', '/answer'].includes(command)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
+    else {
+      const turn = privateChat ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active }) : null;
+      if (turn) { reply = turn.reply; puzzle = { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; }
+      else if (command.startsWith('/')) reply = HELP;
+      else {
+        const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
+        if (budgets.includes(false)) { event('GLOBAL_BUDGET_REACHED'); await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
+        const [history, context, sessions] = await Promise.all([store.history(scopeId), group && cfg.groupContext ? store.context(roomId) : [], getUpcomingSessions({ deadline: Math.min(deadline - 18000, Date.now() + 2500) })]);
+        persona = voice.next;
+        const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
+        const system = `${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}`;
+        try { reply = await generateReply(system, history, context, text, { deadline: Math.min(deadline - 12000, Date.now() + 22000) }); remember = true; }
+        catch { reply = 'Сейчас не получается ответить. Попробуй чуть позже; загадки /puzzle доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
       }
-      await decrementBlatnoyCounter(chatId, userId);
-    } else {
-      // Normal mode — main personality plus the upcoming-sessions context
-      const sessionsText = formatSessionsForPrompt(sessions);
-      fullSystemPrompt = sessionsText
-        ? `${PERSONALITY_PROMPT}\n\n${sessionsText}`
-        : PERSONALITY_PROMPT;
     }
-
-    // Tell the persona which room it is in. This does not affect *whether* we
-    // reply — that gating happened above — only how the character behaves once
-    // we do: free-ranging chat and the puzzle-solving loop in a DM, hands off
-    // the spoiler-hidden weekly puzzle in a group. Applies in Блатной mode too,
-    // since the room is a property of the chat, not of the persona.
-    fullSystemPrompt += `\n\n${contextLine(isPrivate)}`;
-
-    const reply = await generateReply(
-      fullSystemPrompt,
-      userHistory,
-      channelContext,
-      userMessage
-    );
-
-    await sendMessage(reply, chatId);
-
-    const historyWrites = [
-      appendToUserHistory(userId, 'user', userMessage),
-      appendToUserHistory(userId, 'assistant', reply),
-    ];
-    if (isGroup) historyWrites.push(appendToChannelContext(chatId, 'Пульсик', reply));
-    await Promise.all(historyWrites);
+    if (Date.now() > deadline - 9000 || !await store.owns(updateLock) || !await store.owns(userLock)) throw new Error('Deadline or lock expired');
+    // Persist intent before network I/O; a crash now must never cause an automatic resend.
+    await store.markSending(update.update_id); sending = true;
+    const sent = await sendMessage(reply, chatId, { html: replyHtml, deadline: deadline - 3000, topicId, replyTo: group ? m.message_id : undefined });
+    await store.finishUpdate(update.update_id, {
+      scopeId, userId, userText: remember ? text : undefined, reply: remember ? reply : undefined,
+      puzzle, persona, messageId: sent.message_id,
+      roomId: group && cfg.groupContext && remember ? roomId : undefined,
+      contextText: text, username: m.from.first_name || 'Участник',
+    });
+    event('UPDATE_DELIVERED', { updateId: update.update_id, durationMs: Date.now() - started });
+    return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error('[webhook] error:', err.message);
-    await sendMessage('Ой, что-то я задумался... Попробуй ещё раз через минутку 🤔', chatId);
+    event('UPDATE_FAILED', { updateId: update.update_id, state: sending ? 'delivery_review' : 'before_send', code: String(err.code || 'internal') });
+    if (sending && err.ambiguous === false) {
+      // Telegram explicitly rejected the send: retry a 429 only; permanent rejections are completed.
+      if (err.code === 429) {
+        await store.put(`update:${update.update_id}`, { state: 'retry', retryAt: Date.now() + Math.max(1, err.retryAfter || 60) * 1000 }).catch(() => {});
+        return res.status(503).json({ error: 'Rate limited' });
+      }
+      await store.finishUpdate(update.update_id).catch(() => {});
+      return res.status(200).json({ ok: true, rejected: true });
+    }
+    return res.status(sending ? 200 : 503).json({ ok: sending, review: sending });
+  } finally {
+    await Promise.all([store.unlock(userLock).catch(() => {}), store.unlock(updateLock).catch(() => {})]);
   }
-
-  return res.status(200).json({ ok: true });
 };

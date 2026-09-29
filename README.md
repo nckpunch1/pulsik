@@ -1,136 +1,103 @@
-# pulseiq-bot
+# Pulse Bot / Пульсик
 
-Telegram bot (@pulse_iq_bot) for the [@pulseiq_au](https://t.me/pulseiq_au) channel.
+Telegram companion for PulseIQ. Production reference: https://pulsik.vercel.app/.
 
-**Two features:**
-1. **Weekly cron** — posts a *СредаIQ — прокачай интеллект* every Wednesday at 09:00 UTC (7 PM Brisbane / AEST UTC+10, same UTC day). The puzzle is drawn from the curated bank in `content/weekly-puzzles.json`, never generated: posted ids are tracked in Redis so nothing repeats until the bank is exhausted, then it reshuffles. `content/posts.json` is only a safety net for a missing bank file. A fallback fire logs `FALLBACK_USED` and returns `degraded: true`.
-2. **Conversational AI** — Пульсик responds when @mentioned in the group chat, powered by Groq (GPT-OSS 120B, falling back to GPT-OSS 20B) with per-user memory and rolling channel context stored in Redis.
+- Weekly **СредаIQ**: Wednesday 09:00 UTC / 19:00 Brisbane, drawn from a curated bank and posted with a spoiler answer.
+- Member conversations: DMs and explicitly allowed discussion groups/topics. Broadcast channel messages are ignored.
+- Private puzzles: `/puzzle`, `/hint`, `/answer`, `/chat`. Puzzle state and canonical answers come from the bank, not model invention. Unrecognized answers are never automatically labelled wrong.
+- `/start`, `/help`, `/privacy`, `/forget`, `/whoami` work while conversation mode is paused.
+- `/bankstatus`: private, operator-only status. The old phrase is recognized for compatibility but never authorizes access by itself.
 
----
+The repository now contains **16 enabled weekly puzzles** (plus 5 held for editorial review), and **63 enabled chat puzzles** (plus 4 held). The ten new weekly entries are w012–w021. Stable IDs are retained; disabled entries are not selected. See [CONTENT-REVIEW.md](CONTENT-REVIEW.md).
 
-## Deploy to Vercel
+## Local checks
 
-1. Push this repo to GitHub.
-2. Import the project in [Vercel](https://vercel.com).
-3. Connect a **Redis store** in Vercel Storage (KV) — `REDIS_URL` will be injected automatically.
-4. Set the environment variables below in **Project → Settings → Environment Variables**.
-5. Deploy.
+Requires Node **24.x** (also the current Vercel project runtime).
 
----
-
-## Environment variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from [@BotFather](https://t.me/BotFather) |
-| `TELEGRAM_CHAT_ID` | Yes | Default channel for weekly posts, e.g. `@pulseiq_au` |
-| `CRON_SECRET` | **Yes** | Vercel sends this as `Authorization: Bearer <secret>` on cron calls. The endpoint refuses to run without it. |
-| `GROQ_API_KEY` | Yes | Groq API key — get one at https://console.groq.com/keys |
-| `GROQ_MODEL` | No | Chat model override. Default: `openai/gpt-oss-120b` |
-| `GROQ_FALLBACK_MODEL` | No | Model used when the primary errors. Default: `openai/gpt-oss-20b`. Must be a current Groq **production** model — check https://console.groq.com/docs/deprecations before changing. |
-| `REDIS_URL` | Yes | Injected automatically by Vercel when a Redis store is connected |
-| `TELEGRAM_WEBHOOK_SECRET` | **Yes** | Random string to verify webhook requests from Telegram. The webhook refuses updates without it. |
-| `BANK_STATUS_CODE` | No | Numeric code in the puzzle-bank status command (see below). Default: `12345`. Set this to rotate the code without a code change. |
-
-Copy `.env.example` to `.env` for local testing (never commit `.env`).
-
----
-
-## One-time setup after first deploy
-
-### 1. Disable privacy mode on the bot
-
-By default Telegram bots only see messages directed at them. To let Пульсик see all group messages (needed to build channel context):
-
-1. Open [@BotFather](https://t.me/BotFather) → `/setprivacy`
-2. Choose your bot → **Disable**
-
-### 2. Register the webhook
-
-After deploying to Vercel, run this once to tell Telegram where to send updates:
-
-```bash
-TELEGRAM_BOT_TOKEN=... \
-TELEGRAM_WEBHOOK_SECRET=... \
-WEBHOOK_URL=https://your-app.vercel.app \
-node scripts/register-webhook.js
+```sh
+npm ci
+npm run check
+npm audit --omit=dev --audit-level=high
 ```
 
-Telegram will now POST every update to `https://your-app.vercel.app/api/webhook`.
+Tests stub external APIs. For storage integration, supply a **disposable local/CI Redis**:
 
-### 3. Add the bot to the group
-
-Add @pulse_iq_bot to @pulseiq_au as a member. Admin rights are not required if privacy mode is disabled.
-
----
-
-## Local test
-
-```bash
-# Install dependencies
-npm install
-
-# Copy and fill in env vars
-cp .env.example .env
-
-# Start local Vercel dev server
-npx vercel dev
-
-# Trigger the weekly cron manually
-curl -H "Authorization: Bearer your_secret_here" http://localhost:3000/api/send-weekly
-
-# Simulate a webhook update (replace values as needed)
-curl -X POST http://localhost:3000/api/webhook \
-  -H "Content-Type: application/json" \
-  -H "x-telegram-bot-api-secret-token: your_random_secret_here" \
-  -d '{"message":{"text":"@pulse_iq_bot привет!","from":{"id":123,"first_name":"Nick"},"chat":{"id":-456}}}'
+```sh
+REDIS_TEST_URL=redis://127.0.0.1:6379 npm test
 ```
 
----
+CI provisions Redis and runs the same checks. Never point the integration suite at production. No default test calls Telegram or Groq.
 
-## Puzzle banks
+## Configuration
 
-`content/weekly-puzzles.json` is the source of the weekly СредаIQ post. It replaced LLM generation, which produced puzzles that were sometimes ambiguous or unsolvable. Shape:
+Copy `.env.example` to an ignored `.env` for local operations. Put actual production values in Vercel. Never paste secrets into chat or commit them.
 
-```json
-{ "puzzles": [ { "id": "w001", "question": "...", "answer": "...", "explanation": "..." } ] }
+| Variable | Purpose |
+| --- | --- |
+| `BOT_ENV` | Required stable namespace, e.g. `staging` or `production`. Do not change casually: it selects different state. |
+| `TELEGRAM_BOT_TOKEN` | Required token; its numeric prefix identifies this bot. |
+| `BOT_USERNAME` | Default `pulse_iq_bot`; must match `getMe`. |
+| `TELEGRAM_CHAT_ID` | Weekly destination; verified broadcast channel for public launch. |
+| `TELEGRAM_WEBHOOK_SECRET` | Required 16–256 character Telegram-compatible secret. |
+| `CRON_SECRET` | Required cron/health bearer secret. |
+| `REDIS_URL` | Required durable Redis; failures stop processing rather than remove limits. |
+| `GROQ_API_KEY` | Required for conversation generation. |
+| `GROQ_MODEL` / `GROQ_FALLBACK_MODEL` | Defaults `openai/gpt-oss-120b` / `openai/gpt-oss-20b`; no SDK retries. |
+| `WEBHOOK_URL` | HTTPS origin, e.g. `https://pulsik.vercel.app`, without a trailing slash. |
+| `OPERATOR_USER_IDS` | Comma-separated numeric Telegram IDs; required before enabling either launch switch. May be empty during paused `/whoami` setup. Intended admin: `@Nikomaniak`; usernames alone are not authorization. |
+| `ALLOWED_GROUP_IDS` | Comma-separated numeric group IDs. Empty disables group participation. |
+| `PRIVATE_TEST_MODE` | Operator DMs only; blocks groups, weekly posts and overview publication. `/whoami`, `/privacy`, `/forget` remain available in private chats for setup. |
+| `CHAT_ENABLED` | `true` to enable conversations/puzzle play; defaults off. |
+| `WEEKLY_ENABLED` | `true` to allow weekly posts; defaults off. |
+| `WEEKLY_START_DATE` | First approved weekly Wednesday date, required when weekly posting is enabled. |
+| `GROUP_CONTEXT_ENABLED` | Optional background collection of recent group text, defaults off. Enable only with a member-facing notice. |
+| `ALTERNATE_PERSONA_ENABLED` | Optional theatrical persona, defaults off. Shared business/privacy rules remain in force. |
+| `GLOBAL_DAILY_REPLY_LIMIT` | Maximum admitted model-backed turns per UTC day; default 300. Each can make up to two model attempts. |
+| `GLOBAL_MINUTE_REPLY_LIMIT` | Maximum admitted model-backed turns per rolling fixed window; default 30. |
+
+Set a hard spend limit in the Groq account as well. The application cap bounds requests, not exact currency spend. User/chat reply limits are 10/20 per minute. Non-conversational background context is only stored when explicitly enabled.
+
+## Deployment and Telegram setup
+
+1. Use a **separate test bot and private test channel/group** for the rehearsal. Test and production must have different `BOT_ENV` and preferably separate Redis credentials; previews must never register a webhook for the production bot.
+2. Add the production bot as a channel administrator with posting permission. Link a discussion group for member comments and add it to `ALLOWED_GROUP_IDS`. If group privacy remains enabled, name-only triggers will not reliably arrive; disable it in BotFather for that behavior. Only grant extra administrator rights if actually needed.
+3. Operator starts the bot in a private chat so operational alerts can be delivered. `/whoami` reports the numeric user ID; configure that ID for operator authorization.
+4. Deploy with `CHAT_ENABLED=false` and `WEEKLY_ENABLED=false`. Initialize/migrate rotation deliberately; see the runbook. Deployment alone never clears old state.
+5. Register webhook with the required secret. Pending updates are preserved:
+
+```sh
+node --env-file=.env scripts/register-webhook.js
+# Production requires an explicit environment flag:
+node --env-file=.env scripts/register-webhook.js --production
 ```
 
-`question` is the visible text; `answer` and `explanation` go together under the Telegram spoiler. `explanation` is optional — an entry missing `id`, `question` or `answer` is skipped at load with a log line.
+6. Run `npm run preflight`. This is read-only: it checks bot identity, webhook URL, channel/group access, Redis rotation and schedule availability. It cannot inspect Telegram's stored webhook secret; a real test update must verify that.
+7. Complete the private rehearsal in [RUNBOOK.md](RUNBOOK.md), then set launch switches in Vercel and redeploy. Changing Vercel environment variables alone does not change existing deployments.
+8. **Reset the public puzzle rotation last**, with a backup and exact destination confirmation. Do not call the weekly endpoint just to inspect state.
 
-Selection is a random draw among ids not yet in the Redis set `weekly:postedPuzzleIds`. When every id has been posted the handler logs `BANK_EXHAUSTED`, clears the set and starts a fresh cycle (excluding just the previous week's puzzle, so it can't repeat back to back). The set has no TTL — at one post a week a cycle spans months. Each post logs `posted bank puzzle wNNN (n/N this cycle)`.
+## Reliability and privacy
 
-**To top the bank up:** add entries to the file and redeploy. Ids must be unique; new ones count as unused immediately.
+Conversation memory uses environment, bot, chat, topic and user IDs. Legacy mixed memory is never loaded. User/assistant pairs and puzzle state are committed together. Per-user locks prevent concurrent turns and `/forget` races; busy requests return a retryable status.
 
-`content/chat-puzzles.json` is the same shape for DM conversation, but nothing reads it yet.
+Update IDs have seven-day delivery records. Weekly delivery records are durable and separate from puzzle rotation. A `sending` record survives ambiguous Telegram errors or a post-send Redis failure: it blocks an automatic resend and requires operator reconciliation. This prefers a visibly missed/uncertain post over a duplicate. There is no unverified static fallback and no random draw during a Redis outage.
 
-### Checking how many are left
+Chat history is capped at 20 messages, group context at 20 short entries per topic, and messages older than seven days are excluded. Inactive state expires after seven days. Active puzzle seen-history can persist while the conversation remains active. `/forget` removes all indexed history/puzzles/persona state and the user's indexed group quotes, plus old user-only history. Old unindexed legacy group quotes cannot be attributed reliably; they are not read and expire under the old seven-day TTL. `/forget` cannot erase messages already in Telegram or provider records.
 
-Send the bot this exact phrase, in a DM or the group:
+Health checks run daily at 10:00 UTC, an hour after the weekly slot. `/api/health` requires the cron bearer secret and returns non-200 for issues. It alerts configured operators, with a one-day cooldown for an unchanged issue set. Configure an **independent external uptime monitor** for this endpoint too: an application cannot report its own total deployment outage or a missed health cron. See the runbook for incident handling.
 
-```
-Пульсик 12345 статус банков вопросов
-```
+## Persona and game overviews
 
-It replies with how many weekly puzzles are still unused in the current cycle, which ids have gone out, and the size of the chat bank. The command is answered before any LLM call and is never written to chat history. The code is `BANK_STATUS_CODE` (default `12345`) — it is a plain phrase rather than a `/slash` command on purpose, since Telegram advertises registered commands to every member of a group.
+With `ALTERNATE_PERSONA_ENABLED=true`, a member can use `/blatnoy` (or ask for Блатной Пульсик) and `/normal` to switch back. The voice is scoped to that user, chat and topic. It lasts four conversational turns, at most one hour; an unfinished private puzzle keeps the voice through its hints and solution within that hour. Bank facts and answers are never rewritten. Scheduled channel puzzles use the shared СредаIQ format: an individual member's persona does not change a public broadcast.
 
-## Fallback posts
+Operators can keep one temporary game brief per destination, separate from member memory. In the bot's **private chat**:
 
-`content/posts.json` is only used when the bank file itself is missing or unreadable — when that happens the handler logs `BANK_UNAVAILABLE` and `FALLBACK_USED` and returns `degraded: true`, so grep the Vercel logs for those markers rather than trusting the cron's green tick.
-
-Only `type: "puzzle"` entries are eligible, picked by `weekNumber % puzzlePosts.length`, so the list cycles and never runs out. Each entry's header must match its actual content — `puzzle` entries carry the СредаIQ title, `fact` entries carry their own:
-
-```json
-{
-  "id": 21,
-  "type": "puzzle",
-  "content": "🧠 <b>СредаIQ — прокачай интеллект</b>\n\n...\n\n🎯 <i>PulseIQ — интеллектуальные игры в Брисбене</i>"
-}
-{
-  "id": 22,
-  "type": "fact",
-  "content": "💡 <b>Это интересно</b>\n\n...\n\n🎯 <i>PulseIQ — интеллектуальные игры в Брисбене</i>"
-}
+```text
+/gamebrief 2026-10-08
+Content notes about this game, without logistics.
+/overview
+/publish CODE_FROM_PREVIEW
 ```
 
-`parse_mode` is set to `HTML`, so you can use `<b>`, `<i>`, `<tg-spoiler>`, etc.
+`/gamebrief example` loads the supplied October 8 brief. `/gamebrief` shows the notes; `/gameclear` removes them; `/overview_cancel` discards your draft. Notes expire after 30 days and drafts after 24 hours. `/forget` clears conversation memory; use `/gameclear` for these shared administrative notes. Draft generation sends the notes to Groq. Other members cannot access them through these commands or conversational memory.
+
+The overview uses a consistent template and organiser voice, with title, date, time and venue from the live schedule. It requires one matching upcoming game. Review the private preview for factual accuracy before publishing its exact code. Publication rechecks the schedule and brief; any changes require a new preview. Nothing publishes on a timer. One successful overview per game date is recorded permanently to prevent duplicates. These operator commands remain available while chat/weekly switches are paused.

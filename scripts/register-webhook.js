@@ -1,37 +1,10 @@
 'use strict';
-
-// Usage: WEBHOOK_URL=https://your-app.vercel.app node scripts/register-webhook.js
-
-const token = process.env.TELEGRAM_BOT_TOKEN;
-const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-const webhookUrl = process.env.WEBHOOK_URL;
-
-if (!token || !webhookUrl) {
-  console.error('TELEGRAM_BOT_TOKEN and WEBHOOK_URL must be set');
-  process.exit(1);
+const { config } = require('../lib/config');
+const { telegram } = require('../lib/telegram');
+async function main() {
+  const cfg = config();
+  if (process.env.BOT_ENV === 'production' && !process.argv.includes('--production')) throw new Error('Use --production after preflight and test rehearsal');
+  await telegram('setWebhook', { url: `${process.env.WEBHOOK_URL}/api/webhook`, secret_token: cfg.webhookSecret, allowed_updates: ['message'], drop_pending_updates: false });
+  console.log('Webhook registered with secret. Pending updates preserved.');
 }
-
-const url = `https://api.telegram.org/bot${token}/setWebhook`;
-
-fetch(url, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    url: `${webhookUrl}/api/webhook`,
-    ...(secret ? { secret_token: secret } : {}),
-  }),
-})
-  .then(r => r.json())
-  .then(data => {
-    console.log('Telegram response:', JSON.stringify(data, null, 2));
-    if (data.ok) {
-      console.log('Webhook registered successfully.');
-    } else {
-      console.error('Failed to register webhook:', data.description);
-      process.exit(1);
-    }
-  })
-  .catch(err => {
-    console.error('Request failed:', err.message);
-    process.exit(1);
-  });
+main().catch(() => { console.error('Webhook registration failed; check configuration and connectivity.'); process.exitCode = 1; });

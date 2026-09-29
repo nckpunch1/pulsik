@@ -1,13 +1,20 @@
 {
   "name": "pulseiq-bot",
   "version": "1.0.0",
-  "description": "Telegram bot that posts the weekly СредаIQ intellect boost to @pulseiq_au every Wednesday",
+  "description": "Telegram bot that posts the weekly \u0421\u0440\u0435\u0434\u0430IQ intellect boost to @pulseiq_au every Wednesday",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": "24.x"
   },
   "dependencies": {
     "groq-sdk": "^1.2.1",
     "ioredis": "^5.11.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "validate": "node scripts/validate.js",
+    "check": "npm run validate && npm test",
+    "preflight": "node --env-file=.env scripts/preflight.js",
+    "ops": "node --env-file=.env scripts/ops.js"
   }
 }
