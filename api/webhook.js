@@ -80,7 +80,7 @@ module.exports = async function handler(req, res) {
     else if (command === '/whoami') reply = privateChat ? `Твой Telegram user ID: ${userId}. Username сам по себе не даёт прав администратора.` : 'Напиши /whoami мне в личку.';
     else if (command === '/forget') { await store.forget(userId); reply = 'Сохранённая память и история загадок удалены. Новые обращения начнут новую историю.'; }
     else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = 'Снова обычный Пульсик. Если загадка ещё открыта, продолжаем её.'; }
-    else if (voice.start && !['puzzle', 'hint', 'answer', 'chat'].includes(intent)) {
+    else if (voice.start && !['puzzle', 'repeat', 'hint', 'answer', 'chat'].includes(intent)) {
       persona = voice.next;
       if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
       const fallbacks = ['Ну, присаживайся, перетрём. Базар спокойный — можно за жизнь, можно одно дельце на сообразительность раскрутить.', 'О, вот и компания нарисовалась. Не гони лошадей, устраивайся: что у тебя за история?', 'Заглянули на огонёк — дело верное. Тут без понтов: поговорим по душам или загадку распутаем.'];
@@ -97,7 +97,7 @@ module.exports = async function handler(req, res) {
       remember = true;
     }
     else if (command === '/blatnoy') reply = 'Театральный образ пока выключен. Обычный Пульсик на месте!';
-    else if (group && ['puzzle', 'hint', 'answer'].includes(intent)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
+    else if (group && ['puzzle', 'repeat', 'hint', 'answer'].includes(intent)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
     else {
       let modelAdmitted = false;
       const admitModel = async () => {
@@ -123,7 +123,7 @@ module.exports = async function handler(req, res) {
         persona = voice.next;
         const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
         const pendingPuzzle = privateChat && intent !== 'chat' && gameState?.active && !gameState.completed ? getChatBank().find(p => p.id === gameState.active) : null;
-        const puzzleContext = pendingPuzzle ? `Сейчас есть открытая загадка: ${pendingPuzzle.question}\nЭта реплика распознана как разговор, а не попытка ответа. Ответь на неё в текущем образе. Не оценивай её как решение, не раскрывай и не угадывай ответ. Загадку можно продолжить позже.` : intent === 'chat' ? 'Собеседник хочет поболтать. Продолжи текущую беседу в выбранном образе; не здоровайся заново и не навязывай загадки.' : '';
+        const puzzleContext = pendingPuzzle ? `Сейчас есть открытая загадка: ${pendingPuzzle.question}\nЭта реплика распознана как разговор, а не попытка ответа. Ответь на неё в текущем образе. Не оценивай её как решение, не раскрывай и не угадывай ответ. Загадку можно продолжить позже.` : intent === 'chat' ? 'Собеседник хочет поболтать. Продолжи текущую беседу в выбранном образе; не здоровайся заново и не навязывай загадки.' : 'Сейчас нет открытой загадки из проверенного банка. Не повторяй и не оценивай загадки из истории как действующую игру. Если человек пытается ответить на такую загадку, честно объясни, что у тебя нет проверенного условия и ответа, и предложи новую из банка. Никогда не сочиняй условие или подтверждение правильности.';
         const selectedVoice = voice.active ? 'Сейчас выбран Блатной Пульсик. Сохраняй этот голос и в беседе, и в загадках.' : 'Сейчас выбран обычный Пульсик. Не перенимай блатной говор из истории переписки. Прежние реплики в другом образе не меняют текущий выбор.';
         const system = `${selectedVoice}\n\n${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}\n\n${puzzleContext}`;
         try { reply = await generateReply(system, history, context, text, { deadline: Math.min(deadline - 12000, Date.now() + 22000) }); remember = true; }

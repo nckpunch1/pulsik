@@ -11,3 +11,9 @@ test('mentions, negations and unrelated answers do not trigger puzzle actions', 
   assert.equal(conversationIntent('не знаю', true), 'answer');
   assert.equal(conversationIntent('ещё', true), 'puzzle');
 });
+test('screenshot requests choose a new puzzle or repeat without requiring exact phrasing', () => {
+  assert.equal(conversationIntent('давай загадку прошлую я вроде разгадал'), 'puzzle');
+  assert.equal(conversationIntent('дай эту загадку еще раз'), 'repeat');
+  assert.equal(conversationIntent('повтори загадку'), 'repeat');
+  assert.equal(conversationIntent('не давай загадку прошлую я вроде разгадал'), null);
+});

@@ -49,3 +49,24 @@ test('webhook accepts interpreted answers and model outage leaves puzzle open', 
   assert.equal((await failed.store.get('puzzle:1:0:1')).completed, false);
   assert.ok(!failed.sent[0].text.includes(p.explanation));
 });
+test('answer framing is accepted locally without swallowing contradictions', () => {
+  const { answerMatches } = require('../lib/chat-puzzles');
+  assert.equal(answerMatches('ну это тень', ['тень']), true);
+  assert.equal(answerMatches('ответ тень', ['тень']), true);
+  for (const text of ['это не тень', 'тень или дождь', 'тень но я думаю дождь', 'не ответ тень']) assert.equal(answerMatches(text, ['тень']), false);
+});
+test('new and repeat screenshot requests use stored bank state without calling AI', async () => {
+  const h = webhookHarness();
+  await h.run(message(1, 'дай эту загадку еще раз'));
+  assert.match(h.sent[0].text, /нет сохранённой/);
+  await h.run(message(2, 'давай загадку прошлую я вроде разгадал'));
+  const first = await h.store.get('puzzle:1:0:1');
+  const bankPuzzle = getChatBank().find(x => x.id === first.active);
+  await h.run(message(3, 'скажи ответ'));
+  await h.run(message(4, 'дай эту загадку еще раз'));
+  assert.ok(h.sent[3].text.includes(bankPuzzle.question));
+  assert.equal((await h.store.get('puzzle:1:0:1')).active, first.active);
+  await h.run(message(5, `ну это ${bankPuzzle.answer}`));
+  assert.equal((await h.store.get('puzzle:1:0:1')).completed, true);
+  assert.equal(h.prompts.length, 0);
+});
