@@ -39,7 +39,7 @@ module.exports = async function handler(req, res) {
   if (commandTarget && commandTarget.toLowerCase() !== cfg.username.toLowerCase()) return res.status(200).json({ ok: true });
   text = text.replace(/^\/(\w+)@\w+/i, '/$1');
   const command = text.trim().split(/\s+/)[0].toLowerCase();
-  if (cfg.privateTest && (!privateChat || (!cfg.operators.includes(userId) && !['/whoami', '/privacy', '/forget'].includes(command)))) return res.status(200).json({ ok: true, testing: true });
+  if (cfg.privateTest && !privateChat) return res.status(200).json({ ok: true, testing: true });
   const overviewControl = OVERVIEW_COMMANDS.has(command);
   if (!overviewControl) text = text.slice(0, 1000);
   const statusCommand = matchesStatusCommand(text);

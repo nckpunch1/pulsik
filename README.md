@@ -46,7 +46,7 @@ Copy `.env.example` to an ignored `.env` for local operations. Put actual produc
 | `WEBHOOK_URL` | HTTPS origin, e.g. `https://pulsik.vercel.app`, without a trailing slash. |
 | `OPERATOR_USER_IDS` | Comma-separated numeric Telegram IDs; required before enabling either launch switch. May be empty during paused `/whoami` setup. Intended admin: `@Nikomaniak`; usernames alone are not authorization. |
 | `ALLOWED_GROUP_IDS` | Comma-separated numeric group IDs. Empty disables group participation. |
-| `PRIVATE_TEST_MODE` | Operator DMs only; blocks groups, weekly posts and overview publication. `/whoami`, `/privacy`, `/forget` remain available in private chats for setup. |
+| `PRIVATE_TEST_MODE` | DM-only mode for all users; blocks groups, weekly posts and overview publication. Admin commands still require an operator ID. `/whoami`, `/privacy`, `/forget` remain available in private chats for setup. |
 | `CHAT_ENABLED` | `true` to enable conversations/puzzle play; defaults off. |
 | `WEEKLY_ENABLED` | `true` to allow weekly posts; defaults off. |
 | `WEEKLY_START_DATE` | First approved weekly Wednesday date, required when weekly posting is enabled. |

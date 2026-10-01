@@ -95,6 +95,6 @@ npm run ops -- resolve-overview --date 2026-10-08 --confirmed-not-sent --apply -
 
 After confirming absence, an operator must explicitly use a valid preview code again. No automatic retry occurs. `/gameclear` removes temporary notes and invalidates drafts; delivery metadata remains to prevent duplicate posts.
 
-## Private account rehearsal on the existing bot
+## DM-only rollout on the existing bot
 
-Use `PRIVATE_TEST_MODE=true`, `WEEKLY_ENABLED=false`, `ALLOWED_GROUP_IDS=` and `GROUP_CONTEXT_ENABLED=false`. Deploy first with chat paused if the numeric operator ID is unknown; `/whoami` works in private chat for ID discovery. Set `OPERATOR_USER_IDS` to the verified numeric ID, then set `CHAT_ENABLED=true` and `ALTERNATE_PERSONA_ENABLED=true` and redeploy. Only operator DMs can converse. Overview previews are available but `/publish` is blocked. Keep the public puzzle rotation untouched until final launch. Disable private-test mode only when the public rollout is approved.
+Use `PRIVATE_TEST_MODE=true`, `WEEKLY_ENABLED=false`, `ALLOWED_GROUP_IDS=` and `GROUP_CONTEXT_ENABLED=false`. Deploy first with chat paused if the numeric operator ID is unknown; `/whoami` works in private chat for ID discovery. Set `OPERATOR_USER_IDS` to the verified numeric ID, then set `CHAT_ENABLED=true` and `ALTERNATE_PERSONA_ENABLED=true` and redeploy. All users can converse in DMs; operator commands remain restricted to numeric operator IDs. Overview previews are available but `/publish` is blocked. Keep the public puzzle rotation untouched until final launch. Disable private-test mode only when the public rollout is approved.

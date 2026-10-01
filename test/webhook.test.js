@@ -91,11 +91,14 @@ test('whoami reports numeric ID privately without calling model', async () => {
   const h = webhookHarness({ cfg: { chatEnabled: false, operators: [] } });
   await h.run(message(1, '/whoami', { user: 42 })); assert.match(h.sent[0].text, /42/); assert.equal(h.prompts.length, 0);
 });
-test('private testing admits only operator DMs while retaining ID/privacy bootstrap', async () => {
+test('DM-only mode admits non-operator conversations but blocks all groups and admin commands', async () => {
   const h = webhookHarness({ cfg: { privateTest: true } });
   await h.run(message(1, 'hello', { user: 2 }));
+  assert.equal(h.sent.length, 1); assert.equal(h.prompts.length, 1);
   await h.run(message(2, 'Пульсик hello', { chat: -100, type: 'supergroup' }));
-  assert.equal(h.sent.length, 0); assert.equal(h.prompts.length, 0);
-  await h.run(message(3, '/whoami', { user: 2 })); assert.match(h.sent[0].text, /2/);
-  await h.run(message(4, 'hello')); assert.equal(h.prompts.length, 1);
+  await h.run(message(3, '/gamebrief example', { user: 2 }));
+  await h.run(message(4, '/publish anything', { user: 2 }));
+  assert.equal(h.sent.length, 1); assert.equal(h.prompts.length, 1);
+  await h.run(message(5, 'дай загадку', { user: 2 }));
+  assert.ok((await h.store.get('puzzle:2:0:2')).active);
 });
