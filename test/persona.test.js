@@ -20,12 +20,13 @@ test('correct answers and unmatched guesses preserve persona without changing co
   assert.match(wrong.reply, /С приговором погодим/); assert.ok(!wrong.state.completed); assert.doesNotMatch(wrong.reply, /39/);
   const correct = puzzleTurn('39', state, () => 0, { blatnoy: true }); assert.equal(correct.state.completed, true); assert.match(correct.reply, /расклад сошёлся/);
 });
-test('legacy persona stays selected after puzzle completion and migrates to durable preference', () => {
-  const now = Date.now(), stored = { remaining: 0, expiresAt: now + 1000 };
+test('old puzzle voice cannot override normal mode or missing/expired persona memory', () => {
+  const now = Date.now();
   const game = { active: 'c006', voice: 'blatnoy', voiceUntil: now + 1000, completed: false };
-  assert.equal(personaState('/hint', stored, game, true, now).active, true);
-  assert.equal(personaState('hello', stored, { ...game, completed: true }, true, now).active, true);
-  assert.equal(personaState('/hint', stored, game, true, now + 2000).active, false);
+  for (const stored of [null, { mode: 'normal' }, { remaining: 0, expiresAt: now + 1000 }, { remaining: 4, expiresAt: now - 1 }]) {
+    assert.equal(personaState('дай загадку', stored, game, true, now).active, false);
+  }
+  assert.equal(personaState('дай загадку', { mode: 'blatnoy' }, game, true, now).active, true);
 });
 test('/normal exits during a puzzle; other users and rooms are isolated', async () => {
   const h = webhookHarness({ cfg: { personaEnabled: true } });
@@ -73,4 +74,21 @@ test('Russian case endings activate persona through its resilient introduction p
   await h.run(message(2, 'как дела?'));
   assert.match(h.sent[1].text, /в том же образе/);
   assert.equal((await h.store.get('persona:1:0:1')).mode, 'blatnoy');
+});
+
+test('normal conversation and puzzles keep one selected voice despite stale puzzle metadata', async () => {
+  const h = webhookHarness({ cfg: { personaEnabled: true } });
+  await h.store.put('persona:1:0:1', { mode: 'normal' });
+  await h.store.put('puzzle:1:0:1', { active: 'c006', seen: ['c006'], voice: 'blatnoy', voiceUntil: Date.now() + 86400000 });
+  await h.run(message(1, 'дай загадку'));
+  await h.run(message(2, 'дай подсказку'));
+  await h.run(message(3, 'скажи ответ'));
+  for (const reply of h.sent) assert.doesNotMatch(reply.text, /дело занятное|Подкину зацепку|Раскрываем карты/);
+  await h.run(message(4, 'давай поболтаем'));
+  assert.match(h.prompts[0][0], /Сейчас выбран обычный Пульсик/);
+  await h.run(message(5, 'Блатной Пульсик'));
+  await h.run(message(6, 'хочу поговорить с обычным пульсиком'));
+  assert.equal((await h.store.get('persona:1:0:1')).mode, 'normal');
+  await h.run(message(7, 'дай загадку'));
+  assert.doesNotMatch(h.sent[6].text, /дело занятное/);
 });
