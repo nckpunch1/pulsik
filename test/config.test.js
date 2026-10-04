@@ -22,3 +22,8 @@ test('private test mode suppresses weekly publishing even if its switch is set',
   const c = moduleFor({ OPERATOR_USER_IDS: '42', PRIVATE_TEST_MODE: 'true', WEEKLY_ENABLED: 'true', WEEKLY_START_DATE: '2026-09-30' }).config();
   assert.equal(c.privateTest, true); assert.equal(c.weeklyEnabled, false);
 });
+test('topic IDs are positive integers and optional', () => {
+  const c = moduleFor({ ANNOUNCEMENT_TOPIC_ID: '2', WEEKLY_TOPIC_ID: '3', CONVERSATION_TOPIC_ID: '3' }).config();
+  assert.equal(c.announcementTopic, 2); assert.equal(c.weeklyTopic, 3); assert.equal(c.conversationTopic, 3);
+  for (const value of ['0', '-1', '3.5', 'text']) assert.throws(() => moduleFor({ WEEKLY_TOPIC_ID: value }).config());
+});

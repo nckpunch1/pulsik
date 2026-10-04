@@ -8,9 +8,16 @@ async function main() {
   const me = await telegram('getMe', {});
   if (String(me.id) !== cfg.botId || me.username !== cfg.username) problems.push('Bot identity mismatch');
   const channel = await telegram('getChat', { chat_id: cfg.channel });
-  if (channel.type !== 'channel') problems.push('Weekly destination is not a broadcast channel');
   const membership = await telegram('getChatMember', { chat_id: cfg.channel, user_id: Number(cfg.botId) });
-  if (!['administrator', 'creator'].includes(membership.status) || !membership.can_post_messages) problems.push('Missing channel posting permission');
+  if (cfg.weeklyTopic || cfg.announcementTopic) {
+    if (channel.type !== 'supergroup' || !channel.is_forum) problems.push('Topic destination must be a forum supergroup');
+    if (!['member', 'administrator', 'creator'].includes(membership.status)) problems.push('Bot cannot post to forum group');
+    if (membership.status === 'member' && channel.permissions?.can_send_messages === false) problems.push('Group blocks member posting');
+    // Telegram has no read-only getForumTopic method: actual topic delivery needs a rehearsal.
+  } else {
+    if (channel.type !== 'channel') problems.push('Weekly destination is not a broadcast channel');
+    if (!['administrator', 'creator'].includes(membership.status) || !membership.can_post_messages) problems.push('Missing channel posting permission');
+  }
   if (!cfg.groups.length) problems.push('No discussion group configured');
   if (channel.linked_chat_id && !cfg.groups.includes(String(channel.linked_chat_id))) problems.push('Linked discussion group not allowlisted');
   for (const id of cfg.groups) {

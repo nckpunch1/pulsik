@@ -32,7 +32,7 @@ module.exports = async function handler(req, res) {
   if (!Number.isSafeInteger(update.update_id) || !Number.isSafeInteger(m.message_id)) return res.status(400).json({ error: 'Invalid update' });
   if (m.date && m.date * 1000 < Date.now() - 7 * 86400000) return res.status(200).json({ ok: true, stale: true });
   const chatId = String(m.chat.id), userId = String(m.from.id), topicId = m.message_thread_id || 0;
-  if (group && !cfg.groups.includes(chatId)) return res.status(200).json({ ok: true });
+  if (group && (!cfg.groups.includes(chatId) || (cfg.conversationTopic && topicId !== cfg.conversationTopic))) return res.status(200).json({ ok: true });
   let text = m.text || m.caption || '';
   if (typeof text !== 'string' || !text.trim()) return res.status(200).json({ ok: true });
   const commandTarget = text.match(/^\/[a-z]+@([a-z0-9_]+)/i)?.[1];

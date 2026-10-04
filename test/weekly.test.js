@@ -2,13 +2,13 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { load, memoryStore, cfg, response } = require('./helpers.cjs');
 const { scheduledWeek, latestDue, selectPuzzle, buildPost } = require('../lib/weekly');
-function harness(send, store = memoryStore()) {
+function harness(send, store = memoryStore(), overrides = {}) {
   let count = 0;
   store.values.set('rotation', { posted: [], last: null });
   const RealDate = Date;
   class Clock extends RealDate { constructor(...args) { super(...(args.length ? args : ['2026-09-30T10:00:00Z'])); } static now() { return new RealDate('2026-09-30T10:00:00Z').getTime(); } }
   const handler = load('api/send-weekly.js', {
-    '../lib/config': { config: () => cfg, authorized: (a, b) => a === b }, '../lib/redis': store,
+    '../lib/config': { config: () => ({ ...cfg, ...overrides }), authorized: (a, b) => a === b }, '../lib/redis': store,
     '../lib/telegram': { sendMessage: send || (async () => { count++; return { message_id: count }; }) },
     '../lib/weekly': { scheduledWeek: () => ({ id: '2026-09-30', at: new RealDate('2026-09-30T09:00:00Z').getTime() }), selectPuzzle, buildPost },
     '../lib/observability': { event() {} },
@@ -49,4 +49,10 @@ test('exhaustion excludes last puzzle, and failed sends never clear rotation', (
 test('weekly HTML escapes content and keeps spoiler', () => {
   const post = buildPost({ question: '<x>&', answer: '<secret>', explanation: 'why' });
   assert.match(post, /&lt;x&gt;&amp;/); assert.match(post, /<tg-spoiler>&lt;secret&gt;/);
+});
+
+test('weekly post targets topic 3 explicitly', async () => {
+  let destination;
+  const h = harness(async (text, chat, options) => { destination = { chat, options }; return { message_id: 11 }; }, memoryStore(), { weeklyTopic: 3 });
+  await h.run(); assert.equal(destination.options.topicId, 3); assert.equal(destination.chat, cfg.channel);
 });

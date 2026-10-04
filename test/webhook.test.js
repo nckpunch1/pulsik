@@ -102,3 +102,11 @@ test('DM-only mode admits non-operator conversations but blocks all groups and a
   await h.run(message(5, 'дай загадку', { user: 2 }));
   assert.ok((await h.store.get('puzzle:2:0:2')).active);
 });
+test('group conversations are restricted to topic 3 before any context collection', async () => {
+  const h = webhookHarness({ cfg: { conversationTopic: 3, groupContext: true, privateTest: false } });
+  for (const topic of [undefined, 2, 4]) await h.run(message(100 + (topic || 0), 'Пульсик привет', { chat: -100, type: 'supergroup', topic }));
+  assert.equal(h.sent.length, 0); assert.equal(h.store.contexts.size, 0);
+  await h.run(message(200, 'Пульсик привет', { chat: -100, type: 'supergroup', topic: 3 }));
+  assert.equal(h.sent[0].chat, '-100'); assert.equal(h.sent[0].options.topicId, 3);
+  await h.run(message(201, 'привет')); assert.equal(h.sent.length, 2);
+});

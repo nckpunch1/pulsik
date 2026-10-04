@@ -90,3 +90,13 @@ test('private rehearsal can draft but cannot publish', async () => {
   assert.match((await h.run('/publish code1')).reply, /отключена/);
   assert.equal(h.sent.length, 0);
 });
+test('overview preview and publication use announcement topic 2', async () => {
+  const h = setup({ cfg: { announcementTopic: 2 } });
+  const preview = await draft(h); assert.match(preview.reply, /тема: 2/);
+  await h.run('/publish code1'); assert.equal(h.sent[0].options.topicId, 2);
+});
+test('changing announcement topic invalidates the reviewed draft', async () => {
+  const settings = { announcementTopic: 2 }, h = setup({ cfg: settings });
+  await draft(h); settings.announcementTopic = 3;
+  await h.run('/publish code1'); assert.equal(h.sent.length, 0);
+});

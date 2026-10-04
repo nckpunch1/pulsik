@@ -29,10 +29,10 @@ module.exports = async function handler(req, res) {
     const selected = selectPuzzle(getWeeklyBank(), rotation);
     const post = buildPost(selected.puzzle);
     if (post.length > 4096) throw new Error('Post too long');
-    const delivery = { state: 'sending', puzzleId: selected.puzzle.id, at: Date.now(), nextRotation: selected.rotation };
+    const delivery = { state: 'sending', topicId: cfg.weeklyTopic || null, puzzleId: selected.puzzle.id, at: Date.now(), nextRotation: selected.rotation };
     if (!await store.owns(lock)) throw new Error('Lock expired');
     await store.markWeeklySending(slot.id, delivery); sending = true;
-    const result = await sendMessage(post, cfg.channel, { html: true, deadline: deadline - 5000 });
+    const result = await sendMessage(post, cfg.channel, { html: true, topicId: cfg.weeklyTopic, deadline: deadline - 5000 });
     await store.finishWeekly(slot.id, { ...delivery, state: 'sent', messageId: result.message_id, sentAt: Date.now() }, selected.rotation);
     event('WEEKLY_DELIVERED', { week: slot.id, count: selected.rotation.posted.length });
     return res.status(200).json({ ok: true, puzzleId: selected.puzzle.id, messageId: result.message_id });
