@@ -2,7 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { conversationIntent } = require('../lib/conversation-intent');
 test('natural requests accept politeness, names and punctuation', () => {
-  for (const s of ['дай мне загадку', 'Пульсик, загадай загадку!', 'Можно загадку, пожалуйста?', 'можешь мне загадать загадку', 'ещё одну загадку']) assert.equal(conversationIntent(s), 'puzzle', s);
+  for (const s of ['загадка', 'Загадка?', 'Пульсик загадка', 'дай нам загадку', 'Пульсик дай нам загадку для начала', 'дай мне загадку', 'Пульсик, загадай загадку!', 'Можно загадку, пожалуйста?', 'можешь мне загадать загадку', 'ещё одну загадку']) assert.equal(conversationIntent(s), 'puzzle', s);
   for (const s of ['подскажи', 'дай мне подсказку', 'можно подсказку?', 'нужна подсказка']) assert.equal(conversationIntent(s), 'hint', s);
   for (const s of ['скажи ответ', 'покажи мне решение', 'сдаюсь']) assert.equal(conversationIntent(s), 'answer', s);
 });

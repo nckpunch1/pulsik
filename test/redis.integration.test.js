@@ -17,7 +17,10 @@ test('real Redis: locks, atomic turns, scoped memory, forgetting and durable wee
     assert.deepEqual((await s.history(scope)).map(m => m.content), ['PRIVATE', 'RESPONSE']); assert.equal((await s.history(group)).length, 0);
     await r.lpush(s.key(`history:${scope}`), JSON.stringify({ role: 'user', content: 'STALE', at: Date.now() - 8 * 86400000 }));
     assert.ok(!(await s.history(scope)).some(m => m.content === 'STALE'));
-    await s.forget('1'); assert.equal((await s.history(scope)).length, 0); assert.equal(await s.get(`puzzle:${scope}`), null);
+    await s.finishUpdate(3, { scopeId: group, userId: '1', puzzleRoomId: '-100:8', puzzle: { active: 'c006' } });
+    assert.ok(await r.ttl(s.key('group-puzzle:-100:8')) > 0);
+    await s.forget('1');
+    assert.equal((await s.get('group-puzzle:-100:8')).active, 'c006'); assert.equal((await s.history(scope)).length, 0); assert.equal(await s.get(`puzzle:${scope}`), null);
     assert.deepEqual((await s.context('-100:8')).map(m => m.userId), ['2']);
     await s.markSending(42); assert.equal((await s.get('update:42')).state, 'sending'); assert.ok((await s.uncertain()).updates.includes('42'));
     await s.finishUpdate(42); assert.ok(!(await s.uncertain()).updates.includes('42'));

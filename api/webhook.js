@@ -50,10 +50,12 @@ module.exports = async function handler(req, res) {
   if ((statusCommand || overviewControl) && (!privateChat || !cfg.operators.includes(userId))) return res.status(200).json({ ok: true });
   const control = ['/start', '/help', '/privacy', '/forget', '/whoami'].includes(command) || statusCommand || overviewControl || introControl;
   if (!cfg.chatEnabled && !control) return res.status(200).json({ ok: true, paused: true });
-  const addressed = privateChat || control || text.toLowerCase().includes(`@${cfg.username.toLowerCase()}`) || /(?:^|[^\p{L}])пульсик(?:$|[^\p{L}])/iu.test(text) || String(m.reply_to_message?.from?.id) === cfg.botId;
+  const addressed = privateChat || control || Boolean(commandTarget) || ['/puzzle', '/hint', '/answer', '/chat', '/normal'].includes(command) || /^(?:загадка|загадку)[!? .]*$/iu.test(text.trim()) || text.toLowerCase().includes(`@${cfg.username.toLowerCase()}`) || /(?:^|[^\p{L}])пульсик(?:$|[^\p{L}])/iu.test(text) || String(m.reply_to_message?.from?.id) === cfg.botId;
   if (!addressed && !cfg.groupContext) return res.status(200).json({ ok: true });
+  // Keep addressing separate from request parsing so leading @mentions work too.
+  if (text.toLowerCase().startsWith(`@${cfg.username.toLowerCase()}`)) text = text.slice(cfg.username.length + 1).replace(/^[\s,:!-]+/, '');
   const scopeId = store.scope(chatId, userId, topicId), roomId = store.room(chatId, topicId);
-  let updateLock, userLock, sending = false;
+  let updateLock, userLock, puzzleLock, sending = false;
   try {
     updateLock = await store.lock(`update:${update.update_id}`);
     if (!updateLock) return res.status(503).json({ error: 'Update busy' });
@@ -80,7 +82,11 @@ module.exports = async function handler(req, res) {
     const allowed = await Promise.all([store.rateLimit(`user:${userId}`, 10, 60), store.rateLimit(`chat:${chatId}`, 20, 60)]);
     if (allowed.includes(false)) { await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
     let reply, puzzle, persona, replyHtml = false, remember = false;
-    const gameState = !control ? await store.get(`puzzle:${scopeId}`) : null;
+    if (group && !control) {
+      puzzleLock = await store.lock(`group-puzzle:${roomId}`);
+      if (!puzzleLock) return res.status(503).json({ error: 'Group puzzle busy' });
+    }
+    const gameState = !control ? await store.get(group ? `group-puzzle:${roomId}` : `puzzle:${scopeId}`) : null;
     const intent = conversationIntent(text, Boolean(gameState?.active));
     const voice = !control ? personaState(text, cfg.personaEnabled ? await store.get(`persona:${scopeId}`) : null, gameState, cfg.personaEnabled) : { active: false };
     if (overviewControl) { const result = await overviewCommand({ text, cfg, userId, updateId: update.update_id, deadline }); reply = result.reply; replyHtml = Boolean(result.html); }
@@ -89,10 +95,10 @@ module.exports = async function handler(req, res) {
     else if (command === '/privacy') reply = PRIVACY + (cfg.groupContext ? '\nСбор контекста групп включён: последние 20 коротких цитат могут использоваться в пределах этой группы/темы.' : '\nФоновый сбор сообщений групп отключён.');
     else if (command === '/whoami') reply = privateChat ? `Твой Telegram user ID: ${userId}. Username сам по себе не даёт прав администратора.` : 'Напиши /whoami мне в личку.';
     else if (command === '/forget') { await store.forget(userId); reply = 'Сохранённая память и история загадок удалены. Новые обращения начнут новую историю.'; }
-    else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = gameState?.active && !gameState.completed ? 'Снова обычный Пульсик. Загадку можем продолжить.' : 'Снова обычный Пульсик. Продолжаем 🙂'; }
+    else if (voice.stop) { persona = voice.next; puzzle = privateChat && gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = gameState?.active && !gameState.completed ? 'Снова обычный Пульсик. Загадку можем продолжить.' : 'Снова обычный Пульсик. Продолжаем 🙂'; }
     else if (voice.start && !['puzzle', 'repeat', 'hint', 'answer', 'chat'].includes(intent)) {
       persona = voice.next;
-      if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
+      if (privateChat && gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
       const fallbacks = ['Ну, присаживайся, перетрём. Базар спокойный — можно за жизнь, можно одно дельце на сообразительность раскрутить.', 'О, вот и компания нарисовалась. Не гони лошадей, устраивайся: что у тебя за история?', 'Заглянули на огонёк — дело верное. Тут без понтов: поговорим по душам или загадку распутаем.'];
       reply = fallbacks[Math.floor(Math.random() * fallbacks.length)];
       const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
@@ -107,7 +113,6 @@ module.exports = async function handler(req, res) {
       remember = true;
     }
     else if (command === '/blatnoy') reply = 'Театральный образ пока выключен. Обычный Пульсик на месте!';
-    else if (group && ['puzzle', 'repeat', 'hint', 'answer'].includes(intent)) reply = `За загадкой напиши мне в личку: https://t.me/${cfg.username}`;
     else {
       let modelAdmitted = false;
       const admitModel = async () => {
@@ -115,8 +120,8 @@ module.exports = async function handler(req, res) {
         const budgets = await Promise.all([store.rateLimit('global:minute', cfg.minuteBudget, 60), store.rateLimit(`global:day:${new Date().toISOString().slice(0, 10)}`, cfg.dailyBudget, 172800)]);
         modelAdmitted = !budgets.includes(false); return modelAdmitted;
       };
-      if (intent === 'chat') puzzle = { ...gameState, seen: gameState?.seen || [], active: null, completed: true, hints: 0 };
-      let turn = privateChat && intent !== 'chat' ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active, deferUnknown: true }) : null;
+      if (privateChat && intent === 'chat') puzzle = { ...gameState, seen: gameState?.seen || [], active: null, completed: true, hints: 0 };
+      let turn = intent !== 'chat' ? puzzleTurn(text, gameState, Math.random, { blatnoy: voice.active, deferUnknown: true }) : null;
       if (turn?.needsUnderstanding) {
         let kind = 'uncertain';
         if (await admitModel()) {
@@ -125,7 +130,7 @@ module.exports = async function handler(req, res) {
         }
         turn = kind === 'chat' ? null : understoodTurn(kind, text, gameState, voice.active);
       }
-      if (turn) { reply = turn.reply; puzzle = { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; remember = true; }
+      if (turn) { reply = turn.reply; puzzle = group ? turn.state : { ...turn.state, voice: voice.active ? 'blatnoy' : null, voiceUntil: voice.active ? voice.expiresAt : 0 }; persona = voice.next; remember = true; }
       else if (command.startsWith('/') && intent !== 'chat') reply = HELP;
       else {
         if (!await admitModel()) { event('GLOBAL_BUDGET_REACHED'); await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
@@ -139,7 +144,7 @@ module.exports = async function handler(req, res) {
         }
         persona = voice.next;
         const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
-        const pendingPuzzle = privateChat && intent !== 'chat' && gameState?.active && !gameState.completed ? getChatBank().find(p => p.id === gameState.active) : null;
+        const pendingPuzzle = intent !== 'chat' && gameState?.active && !gameState.completed ? getChatBank().find(p => p.id === gameState.active) : null;
         const puzzleContext = pendingPuzzle ? `Сейчас есть открытая загадка: ${pendingPuzzle.question}\nЭта реплика распознана как разговор, а не попытка ответа. Ответь на неё в текущем образе. Не оценивай её как решение, не раскрывай и не угадывай ответ. Загадку можно продолжить позже.` : intent === 'chat' ? 'Собеседник хочет поболтать. Продолжи текущую беседу в выбранном образе; не здоровайся заново и не навязывай загадки.' : 'Сейчас нет открытой загадки из проверенного банка. Не повторяй и не оценивай загадки из истории как действующую игру. Если человек пытается ответить на такую загадку, честно объясни, что у тебя нет проверенного условия и ответа, и предложи новую из банка. Никогда не сочиняй условие или подтверждение правильности.';
         const selectedVoice = voice.active ? 'Сейчас выбран Блатной Пульсик. Сохраняй этот голос и в беседе, и в загадках.' : 'Сейчас выбран обычный Пульсик. Не перенимай блатной говор из истории переписки. Прежние реплики в другом образе не меняют текущий выбор.';
         const system = `${selectedVoice}\n\n${style}\n\n${SHARED_RULES}\n\n${contextLine(privateChat)}\n\n${formatSessionsForPrompt(sessions)}\n\n${puzzleContext}`;
@@ -147,13 +152,13 @@ module.exports = async function handler(req, res) {
         catch { reply = voice.active ? 'Эх, связь подвела — мысль до меня не дошла. Я всё ещё здесь, в том же образе. Давай попробуем чуть позже.' : 'Сейчас не получается ответить. Попробуй чуть позже; можно попросить «дай загадку» — они доступны без ИИ.'; event('MODEL_UNAVAILABLE', { updateId: update.update_id }); }
       }
     }
-    if (Date.now() > deadline - 9000 || !await store.owns(updateLock) || !await store.owns(userLock)) throw new Error('Deadline or lock expired');
+    if (Date.now() > deadline - 9000 || !await store.owns(updateLock) || !await store.owns(userLock) || (puzzleLock && !await store.owns(puzzleLock))) throw new Error('Deadline or lock expired');
     // Persist intent before network I/O; a crash now must never cause an automatic resend.
     await store.markSending(update.update_id); sending = true;
     const sent = await sendMessage(reply, chatId, { html: replyHtml, deadline: deadline - 3000, topicId, replyTo: group ? m.message_id : undefined });
     await store.finishUpdate(update.update_id, {
       scopeId, userId, userText: remember ? text : undefined, reply: remember ? reply : undefined,
-      puzzle, persona, messageId: sent.message_id,
+      puzzle, puzzleRoomId: group ? roomId : undefined, persona, messageId: sent.message_id,
       roomId: group && cfg.groupContext && remember ? roomId : undefined,
       contextText: text, username: m.from.first_name || 'Участник',
     });
@@ -172,6 +177,6 @@ module.exports = async function handler(req, res) {
     }
     return res.status(sending ? 200 : 503).json({ ok: sending, review: sending });
   } finally {
-    await Promise.all([store.unlock(userLock).catch(() => {}), store.unlock(updateLock).catch(() => {})]);
+    await Promise.all([store.unlock(puzzleLock).catch(() => {}), store.unlock(userLock).catch(() => {}), store.unlock(updateLock).catch(() => {})]);
   }
 };

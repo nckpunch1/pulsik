@@ -24,7 +24,7 @@ function memoryStore() {
     finishUpdate: async (id, x = {}) => {
       values.set(`update:${id}`, { state: 'done' });
       if (x.userText && x.reply) histories.set(x.scopeId, [...(histories.get(x.scopeId) || []), { role: 'user', content: x.userText }, { role: 'assistant', content: x.reply }]);
-      if (x.puzzle !== undefined) values.set(`puzzle:${x.scopeId}`, x.puzzle);
+      if (x.puzzle !== undefined) values.set(x.puzzleRoomId ? `group-puzzle:${x.puzzleRoomId}` : `puzzle:${x.scopeId}`, x.puzzle);
       if (x.persona !== undefined) values.set(`persona:${x.scopeId}`, x.persona);
       if (x.roomId && x.contextText) contexts.set(x.roomId, [...(contexts.get(x.roomId) || []), { userId: x.userId, content: x.contextText }]);
     },
