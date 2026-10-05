@@ -79,3 +79,27 @@ test('model failures record safe reason codes without provider text', async () =
   assert.equal(events[0].code, 'http_429'); assert.equal(events[1].code, 'truncated_output');
   assert.doesNotMatch(JSON.stringify(events), /sensitive provider body|partial/);
 });
+test('fresh schedule tolerates a transient failure and allows a cold-start response', async () => {
+  let calls = 0; const timeouts = [];
+  const s = load('lib/sessions.js', { './observability': { event() {} } }, {
+    AbortSignal: { timeout: ms => { timeouts.push(ms); return {}; } },
+    fetch: async () => { if (++calls === 1) throw Object.assign(Error(), { name: 'TimeoutError' }); return { ok: true, json: async () => ({ sessions: [{ name: 'Game' }] }) }; },
+  });
+  assert.equal((await s.getUpcomingSessions({ fresh: true }))[0].name, 'Game');
+  assert.equal(calls, 2); assert.equal(timeouts[0], 5000);
+});
+test('failed fresh schedule does not reuse cached facts or retry permanent errors', async () => {
+  let fail = false, calls = 0;
+  const s = load('lib/sessions.js', { './observability': { event() {} } }, { fetch: async () => {
+    calls++; return fail ? { ok: false, status: 403 } : { ok: true, json: async () => ({ sessions: [{ name: 'Old' }] }) };
+  } });
+  await s.getUpcomingSessions(); fail = true;
+  assert.equal(await s.getUpcomingSessions({ fresh: true }), null); assert.equal(calls, 2);
+});
+test('schedule retry cannot run after the shared deadline', async () => {
+  let now = 0, calls = 0;
+  const s = load('lib/sessions.js', { './observability': { event() {} } }, {
+    Date: { now: () => now }, fetch: async () => { calls++; now = 8001; throw Error('timeout'); },
+  });
+  assert.equal(await s.getUpcomingSessions({ deadline: 8000, fresh: true }), null); assert.equal(calls, 1);
+});
