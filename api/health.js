@@ -15,7 +15,7 @@ module.exports = async function handler(req, res) {
   if (!cfg.operators.length) issues.push('operator_unconfigured');
   try {
     const pending = await store.uncertain();
-    if (pending.updates.length || pending.weeks.length || pending.overviews?.length) issues.push('delivery_review');
+    if (pending.updates.length || pending.weeks.length || pending.overviews?.length || pending.introductions?.length) issues.push('delivery_review');
     const rotation = await store.get(store.rotationName());
     if (cfg.weeklyEnabled && !rotation) issues.push('rotation_uninitialized');
     const slot = latestDue();

@@ -1,4 +1,5 @@
 'use strict';
+const { isIntroduction, sendIntroduction } = require('../lib/group-introduction');
 const { config, authorized } = require('../lib/config');
 const store = require('../lib/redis');
 const { sendMessage } = require('../lib/telegram');
@@ -40,12 +41,14 @@ module.exports = async function handler(req, res) {
   text = text.replace(/^\/(\w+)@\w+/i, '/$1');
   const command = text.trim().split(/\s+/)[0].toLowerCase();
   if (cfg.privateTest && !privateChat) return res.status(200).json({ ok: true, testing: true });
+  const introControl = isIntroduction(text, cfg.username);
+  if (introControl && (!group || !cfg.operators.includes(userId))) return res.status(200).json({ ok: true });
   const overviewControl = OVERVIEW_COMMANDS.has(command);
   if (!overviewControl) text = text.slice(0, 1000);
   const statusCommand = matchesStatusCommand(text);
   // Operational requests never enter the LLM or shared context, including unauthorized ones.
   if ((statusCommand || overviewControl) && (!privateChat || !cfg.operators.includes(userId))) return res.status(200).json({ ok: true });
-  const control = ['/start', '/help', '/privacy', '/forget', '/whoami'].includes(command) || statusCommand || overviewControl;
+  const control = ['/start', '/help', '/privacy', '/forget', '/whoami'].includes(command) || statusCommand || overviewControl || introControl;
   if (!cfg.chatEnabled && !control) return res.status(200).json({ ok: true, paused: true });
   const addressed = privateChat || control || text.toLowerCase().includes(`@${cfg.username.toLowerCase()}`) || /(?:^|[^\p{L}])пульсик(?:$|[^\p{L}])/iu.test(text) || String(m.reply_to_message?.from?.id) === cfg.botId;
   if (!addressed && !cfg.groupContext) return res.status(200).json({ ok: true });
@@ -63,6 +66,13 @@ module.exports = async function handler(req, res) {
     // A user-wide lock also makes /forget atomic relative to that user's turns in other rooms.
     userLock = await store.lock(`user:${userId}`);
     if (!userLock) return res.status(503).json({ error: 'Conversation busy' });
+    if (introControl) {
+      if (!cfg.chatEnabled) return res.status(200).json({ ok: true, paused: true });
+      const result = await sendIntroduction({ store, sendMessage, cfg, chatId, topicId, messageId: m.message_id, deadline });
+      if (result.busy) return res.status(503).json({ error: 'Introduction busy' });
+      await store.finishUpdate(update.update_id);
+      return res.status(200).json({ ok: true, ...result });
+    }
     if (!addressed) {
       await store.finishUpdate(update.update_id, { roomId, userId, username: m.from.first_name || 'Участник', contextText: text });
       return res.status(200).json({ ok: true });

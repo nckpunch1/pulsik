@@ -32,6 +32,8 @@ function memoryStore() {
     rotationName: () => 'rotation', deliveryName: week => `delivery:${week}`,
     markWeeklySending: async (week, d) => values.set(`delivery:${week}`, d),
     finishWeekly: async (week, d, r) => { values.set(`delivery:${week}`, d); values.set('rotation', r); },
+    markIntroductionSending: async (name, d) => values.set(name, d),
+    finishIntroduction: async (name, d) => values.set(name, d),
     markOverviewSending: async (name, d) => values.set(name, d),
     finishOverview: async (name, d) => values.set(name, d),
   };

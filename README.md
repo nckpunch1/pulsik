@@ -107,3 +107,7 @@ Member puzzle play also supports conversational Russian: «дай мне заг�
 ## Forum topic routing
 
 The intended forum layout is announcements in topic 2 and weekly puzzles/conversation in topic 3. Set `ANNOUNCEMENT_TOPIC_ID=2`, `WEEKLY_TOPIC_ID=3`, and `CONVERSATION_TOPIC_ID=3`. Topic IDs are local to their group: verify `TELEGRAM_CHAT_ID` is the intended forum and put its numeric ID in `ALLOWED_GROUP_IDS` before enabling group access. Messages outside the configured conversation topic are ignored before storing context. DMs are unaffected. Overview previews show their topic and become invalid if it changes. Posting failures never fall back to another topic. Existing delivery records remain intact across topic changes to prevent duplicate posts. A live rehearsal must verify the topics exist and permit posting.
+
+## One-time group introduction
+
+An operator can send `/introduce@pulse_iq_bot` or «Пульсик, знакомься!» in the allowed conversation topic. Prefer the command when Telegram group privacy is enabled. It posts the fixed welcome once per group, independently of each member's personality and chat history. The record has no expiry and `/forget` does not clear it. Non-operators, DMs and other topics cannot trigger it; a repeat trigger stays silent. An uncertain delivery blocks all resends and raises `delivery_review`; inspect Telegram and reconcile storage manually before any further attempt. No introduction is posted just by deploying or enabling group access.
