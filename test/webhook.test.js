@@ -110,3 +110,12 @@ test('group conversations are restricted to topic 3 before any context collectio
   assert.equal(h.sent[0].chat, '-100'); assert.equal(h.sent[0].options.topicId, 3);
   await h.run(message(201, 'привет')); assert.equal(h.sent.length, 2);
 });
+test('group replies include quoted bot text without enabling shared background memory', async () => {
+  const h = webhookHarness({ cfg: { groupContext: false } });
+  await h.run(message(1, 'Блатной семиклассник 😂', { user: 2, chat: -100, type: 'supergroup', topic: 3, replyTo: { from: { id: 123 }, text: 'Я Пульсик, перетрём по душам.', message_thread_id: 3 } }));
+  assert.equal(h.prompts[0][2].length, 1); assert.match(h.prompts[0][2][0].content, /перетрём/);
+  assert.match(h.prompts[0][0], /не сообщают возраст/);
+  assert.equal(h.store.contexts.size, 0);
+  await h.run(message(2, 'Пульсик привет', { user: 2, chat: -100, type: 'supergroup', topic: 3, replyTo: { from: { id: 123 }, text: 'OTHER TOPIC', message_thread_id: 2 } }));
+  assert.equal(h.prompts[1][2].length, 0);
+});

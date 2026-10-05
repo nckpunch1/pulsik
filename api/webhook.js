@@ -89,7 +89,7 @@ module.exports = async function handler(req, res) {
     else if (command === '/privacy') reply = PRIVACY + (cfg.groupContext ? '\nСбор контекста групп включён: последние 20 коротких цитат могут использоваться в пределах этой группы/темы.' : '\nФоновый сбор сообщений групп отключён.');
     else if (command === '/whoami') reply = privateChat ? `Твой Telegram user ID: ${userId}. Username сам по себе не даёт прав администратора.` : 'Напиши /whoami мне в личку.';
     else if (command === '/forget') { await store.forget(userId); reply = 'Сохранённая память и история загадок удалены. Новые обращения начнут новую историю.'; }
-    else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = 'Снова обычный Пульсик. Если загадка ещё открыта, продолжаем её.'; }
+    else if (voice.stop) { persona = voice.next; puzzle = gameState ? { ...gameState, voice: null, voiceUntil: 0 } : undefined; reply = gameState?.active && !gameState.completed ? 'Снова обычный Пульсик. Загадку можем продолжить.' : 'Снова обычный Пульсик. Продолжаем 🙂'; }
     else if (voice.start && !['puzzle', 'repeat', 'hint', 'answer', 'chat'].includes(intent)) {
       persona = voice.next;
       if (gameState?.active && !gameState.completed) puzzle = { ...gameState, voice: 'blatnoy', voiceUntil: voice.expiresAt };
@@ -130,6 +130,13 @@ module.exports = async function handler(req, res) {
       else {
         if (!await admitModel()) { event('GLOBAL_BUDGET_REACHED'); await store.finishUpdate(update.update_id); return res.status(200).json({ ok: true, limited: true }); }
         const [history, context, sessions] = await Promise.all([store.history(scopeId), group && cfg.groupContext ? store.context(roomId) : [], getUpcomingSessions({ deadline: Math.min(deadline - 18000, Date.now() + 2500) })]);
+        // A reply supplies its own narrow context even when background collection
+        // is disabled. Only include this bot's message from this same room.
+        const parent = m.reply_to_message;
+        if (group && String(parent?.from?.id) === cfg.botId && (!parent.chat || String(parent.chat.id) === chatId) && (!parent.message_thread_id || parent.message_thread_id === topicId)) {
+          const quoted = parent.text || parent.caption;
+          if (typeof quoted === 'string' && quoted.trim()) context.push({ username: 'Пульсик — сообщение, на которое отвечает собеседник', content: quoted.slice(0, 1500) });
+        }
         persona = voice.next;
         const style = voice.active ? BLATNOY_PERSONALITY_PROMPT : PERSONALITY_PROMPT;
         const pendingPuzzle = privateChat && intent !== 'chat' && gameState?.active && !gameState.completed ? getChatBank().find(p => p.id === gameState.active) : null;

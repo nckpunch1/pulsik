@@ -92,3 +92,13 @@ test('normal conversation and puzzles keep one selected voice despite stale puzz
   await h.run(message(7, 'дай загадку'));
   assert.doesNotMatch(h.sent[6].text, /дело занятное/);
 });
+test('announcements and discussion of a persona do not activate it', () => {
+  for (const text of ['Всем привет! Позовите «Блатного Пульсика», если хочется другого настроения. Пульсик, тебе слово!', 'Блатной Пульсик смешно говорит', 'кто такой блатной пульсик?', 'мне не нравится блатной пульсик']) {
+    assert.equal(personaState(text, { mode: 'normal' }, null, true).active, false, text);
+  }
+});
+test('normal switch does not mention a nonexistent puzzle', async () => {
+  const h = webhookHarness({ cfg: { personaEnabled: true } });
+  await h.run(message(1, 'Пульсик говори нормально'));
+  assert.doesNotMatch(h.sent[0].text, /загадк/i);
+});
